@@ -1,162 +1,155 @@
 import 'package:flutter/material.dart';
+import 'package:codexhub01/services/messageservice.dart';
 
-class MenteeMessagingScreen extends StatefulWidget {
-  const MenteeMessagingScreen({super.key});
+class ChatScreen extends StatefulWidget {
+  final String otherUserId;
+  final String otherUserName;
+
+  const ChatScreen({
+    super.key,
+    required this.otherUserId,
+    required this.otherUserName,
+  });
 
   @override
-  MenteeMessagingScreenState createState() => MenteeMessagingScreenState();
+  State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class MenteeMessagingScreenState extends State<MenteeMessagingScreen> {
-  final List<Map<String, dynamic>> messages = [
-    {
-      'sender': 'Juan',
-      'message': 'Sir, paano po ito? I\'m having trouble with my Flutter code.',
-      'time': '10:30 AM',
-      'isMentor': false
-    },
-    {
-      'sender': 'Mentor',
-      'message': 'I-check mo ang syntax mo. Make sure all your brackets are properly closed.',
-      'time': '10:32 AM',
-      'isMentor': true
-    },
-    {
-      'sender': 'Juan',
-      'message': 'Okay po, try ko. Thank you!',
-      'time': '10:35 AM',
-      'isMentor': false
-    },
-  ];
-  
+class _ChatScreenState extends State<ChatScreen> {
+  final MessageService service = MessageService();
   final TextEditingController messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
-  void _sendMessage() {
-    if (messageController.text.isNotEmpty) {
-      setState(() {
-        messages.add({
-          'sender': 'You',
-          'message': messageController.text,
-          'time': _formatTime(DateTime.now()),
-          'isMentor': false,
-        });
-        messageController.clear();
-        
-        // Auto-scroll to the bottom when a new message is sent
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scrollController.hasClients) {
-            _scrollController.animateTo(
-              _scrollController.position.maxScrollExtent,
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeOut,
-            );
-          }
-        });
-      });
+  List<Map<String, dynamic>> messages = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMessages();
+    _listenRealtime();
+  }
+
+  void _listenRealtime() {
+    service.messageStream(widget.otherUserId).listen((newMessages) {
+      if (!mounted) return;
+      setState(() => messages = newMessages);
+      _scrollToBottom();
+    });
+  }
+
+  Future<void> _loadMessages() async {
+    final loaded = await service.getMessages(widget.otherUserId);
+    if (!mounted) return;
+    setState(() => messages = loaded);
+    _scrollToBottom();
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent + 50,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Future<void> _sendMessage() async {
+    final text = messageController.text.trim();
+    if (text.isEmpty) return;
+
+    try {
+      await service.sendMessage(widget.otherUserId, text);
+      messageController.clear();
+      _scrollToBottom();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to send message: $e')));
     }
   }
 
-  String _formatTime(DateTime time) {
-    return '${time.hour % 12 == 0 ? 12 : time.hour % 12}:${time.minute.toString().padLeft(2, '0')} ${time.hour >= 12 ? 'PM' : 'AM'}';
-  }
-
-  void _startVideoCall() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const VideoCallScreen()),
-    );
+  String _formatTime(String? timestamp) {
+    if (timestamp == null) return '';
+    final dateTime = DateTime.tryParse(timestamp)?.toLocal();
+    if (dateTime == null) return '';
+    final hour = dateTime.hour % 12 == 0 ? 12 : dateTime.hour % 12;
+    final minute = dateTime.minute.toString().padLeft(2, '0');
+    final ampm = dateTime.hour >= 12 ? 'PM' : 'AM';
+    return '$hour:$minute $ampm';
   }
 
   @override
   Widget build(BuildContext context) {
+    final currentUserId = service.currentUserId;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Mentee Messaging'),
+        title: Text(widget.otherUserName),
         backgroundColor: Colors.indigo,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.videocam),
-            onPressed: _startVideoCall,
-            tooltip: 'Start Video Call',
-          ),
-          IconButton(
-            icon: const Icon(Icons.info_outline),
-            onPressed: () {
-              showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('Conversation Info'),
-                  content: const Text('You are chatting with your mentor.'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('OK'),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ],
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context), // ✅ Back button
+        ),
       ),
       body: Column(
         children: [
-          // Chat header with mentor info
-          Container(
-            padding: const EdgeInsets.all(12),
-            color: Colors.grey[100],
-            child: Row(
-              children: [
-                const CircleAvatar(
-                  backgroundColor: Colors.indigo,
-                  child: Icon(Icons.person, color: Colors.white),
-                ),
-                const SizedBox(width: 12),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Mentor Name',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                    Text(
-                      'Online',
-                      style: TextStyle(
-                        color: Colors.green[700],
-                        fontSize: 14,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          
-          // Messages list
           Expanded(
             child: ListView.builder(
               controller: _scrollController,
               padding: const EdgeInsets.all(8),
               itemCount: messages.length,
               itemBuilder: (context, index) {
-                final message = messages[index];
-                final bool isMentor = message['isMentor'];
-                
-                return ChatBubble(
-                  message: message['message'],
-                  time: message['time'],
-                  isMentor: isMentor,
-                  sender: message['sender'],
+                final msg = messages[index];
+                final isMe = msg['sender_id'].toString() == currentUserId;
+                final messageText = msg['message'] ?? '';
+                final createdAt = msg['created_at'] ?? '';
+
+                return Align(
+                  alignment:
+                      isMe ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: isMe ? Colors.indigo : Colors.grey[300],
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          isMe ? 'You' : widget.otherUserName,
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: isMe ? Colors.white : Colors.black,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          messageText,
+                          style: TextStyle(
+                            color: isMe ? Colors.white : Colors.black,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _formatTime(createdAt),
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: isMe ? Colors.white70 : Colors.black54,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 );
               },
             ),
           ),
-          
-          // Message input area
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
@@ -165,12 +158,6 @@ class MenteeMessagingScreenState extends State<MenteeMessagingScreen> {
             ),
             child: Row(
               children: [
-                IconButton(
-                  icon: const Icon(Icons.attach_file),
-                  onPressed: () {
-                    // Handle file attachment
-                  },
-                ),
                 Expanded(
                   child: TextField(
                     controller: messageController,
@@ -179,7 +166,9 @@ class MenteeMessagingScreenState extends State<MenteeMessagingScreen> {
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(24),
                       ),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                      ),
                     ),
                     onSubmitted: (_) => _sendMessage(),
                   ),
@@ -194,178 +183,6 @@ class MenteeMessagingScreenState extends State<MenteeMessagingScreen> {
                 ),
               ],
             ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class ChatBubble extends StatelessWidget {
-  final String message;
-  final String time;
-  final bool isMentor;
-  final String sender;
-
-  const ChatBubble({
-    super.key,
-    required this.message,
-    required this.time,
-    required this.isMentor,
-    required this.sender,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        mainAxisAlignment: isMentor ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          if (!isMentor)
-            const CircleAvatar(
-              radius: 14,
-              backgroundColor: Colors.grey,
-              child: Icon(Icons.person, size: 16, color: Colors.white),
-            ),
-          if (!isMentor) const SizedBox(width: 6),
-          Flexible(
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: isMentor ? Colors.indigo : Colors.grey[300],
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: isMentor ? const Radius.circular(16) : const Radius.circular(4),
-                  bottomRight: isMentor ? const Radius.circular(4) : const Radius.circular(16),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (!isMentor)
-                    Text(
-                      sender,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: isMentor ? Colors.white : Colors.black,
-                      ),
-                    ),
-                  Text(
-                    message,
-                    style: TextStyle(
-                      color: isMentor ? Colors.white : Colors.black,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    time,
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: isMentor ? Colors.white70 : Colors.black54,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (isMentor) const SizedBox(width: 6),
-          if (isMentor)
-            const CircleAvatar(
-              radius: 14,
-              backgroundColor: Colors.indigo,
-              child: Icon(Icons.person, size: 16, color: Colors.white),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class VideoCallScreen extends StatelessWidget {
-  const VideoCallScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Video Call'),
-        backgroundColor: Colors.indigo,
-      ),
-      body: Stack(
-        children: [
-          // Background with gradient
-          Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Colors.indigo, Colors.black87],
-              ),
-            ),
-          ),
-          
-          // Video call content
-          Column(
-            children: [
-              Expanded(
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const CircleAvatar(
-                        radius: 50,
-                        backgroundColor: Colors.white24,
-                        child: Icon(
-                          Icons.videocam,
-                          size: 50,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      const Text(
-                        "Video Call with Mentor",
-                        style: TextStyle(
-                          fontSize: 20,
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        "Connecting...",
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: Colors.grey[300],
-                        ),
-                      ),
-                      const SizedBox(height: 30),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.mic, color: Colors.white),
-                            onPressed: () {},
-                          ),
-                          const SizedBox(width: 20),
-                          IconButton(
-                            icon: const Icon(Icons.videocam, color: Colors.white),
-                            onPressed: () {},
-                          ),
-                          const SizedBox(width: 20),
-                          IconButton(
-                            icon: const Icon(Icons.call_end, color: Colors.red),
-                            onPressed: () => Navigator.pop(context),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
           ),
         ],
       ),

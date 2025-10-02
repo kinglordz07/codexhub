@@ -1,93 +1,170 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/sessionservice.dart';
 
 class ScheduleSessionScreen extends StatefulWidget {
   const ScheduleSessionScreen({super.key});
 
   @override
-  ScheduleSessionScreenState createState() => ScheduleSessionScreenState();
+  State<ScheduleSessionScreen> createState() => _ScheduleSessionScreenState();
 }
 
-class ScheduleSessionScreenState extends State<ScheduleSessionScreen> {
-  DateTime selectedDate = DateTime.now();
-  TimeOfDay selectedTime = TimeOfDay.now();
+class _ScheduleSessionScreenState extends State<ScheduleSessionScreen> {
+  DateTime? selectedDate;
+  TimeOfDay? selectedTime;
   String selectedSessionType = 'One-on-One Mentorship';
+  final TextEditingController notesController = TextEditingController();
+
+  // Mentors list
+  List<Map<String, dynamic>> mentors = [];
+  String? selectedMentorId;
+
   final List<String> sessionTypes = [
     'One-on-One Mentorship',
     'Group Session',
     'Live Code Review',
   ];
-  final TextEditingController notesController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchMentors();
+  }
+
+  Future<void> _fetchMentors() async {
+    final response = await Supabase.instance.client
+        .from('profiles')
+        .select('id, username')
+        .eq('role', 'mentor');
+
+    setState(() {
+      mentors = List<Map<String, dynamic>>.from(response);
+      if (mentors.isNotEmpty) {
+        selectedMentorId = mentors.first['id'] as String;
+      }
+    });
+  }
 
   Future<void> _selectDate(BuildContext context) async {
-    final DateTime? pickedDate = await showDatePicker(
+    final picked = await showDatePicker(
       context: context,
-      initialDate: selectedDate,
+      initialDate: DateTime.now(),
       firstDate: DateTime.now(),
       lastDate: DateTime(2100),
     );
-    if (pickedDate != null && pickedDate != selectedDate) {
-      setState(() {
-        selectedDate = pickedDate;
-      });
-    }
+    if (picked != null) setState(() => selectedDate = picked);
   }
 
   Future<void> _selectTime(BuildContext context) async {
-    final TimeOfDay? pickedTime = await showTimePicker(
+    final picked = await showTimePicker(
       context: context,
-      initialTime: selectedTime,
+      initialTime: TimeOfDay.now(),
     );
-    if (pickedTime != null && pickedTime != selectedTime) {
-      setState(() {
-        selectedTime = pickedTime;
-      });
-    }
+    if (picked != null) setState(() => selectedTime = picked);
   }
 
-  void _scheduleSession() {
-    String scheduledDetails =
-        "Session Type: $selectedSessionType\nDate: ${selectedDate.toLocal().toString().split(' ')[0]}\nTime: ${selectedTime.format(context)}\nNotes: ${notesController.text}";
+  void _scheduleSession() async {
+    final sessionService = SessionService();
+    final currentUserId = sessionService.currentUserId;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text("Session Scheduled!\n$scheduledDetails"),
-        duration: const Duration(seconds: 5),
-      ),
-    );
-    
-    // Optional: Navigate back or reset the form
-    // Navigator.pop(context);
+    if (currentUserId == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("User not logged in.")));
+      return;
+    }
+
+    if (selectedMentorId == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Please select a mentor.")));
+      return;
+    }
+
+    if (selectedDate == null || selectedTime == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please select a date and time.")),
+      );
+      return;
+    }
+
+    final mentorId = selectedMentorId!;
+    final menteeId = currentUserId;
+
+    final timeString =
+        "${selectedTime!.hour.toString().padLeft(2, '0')}:${selectedTime!.minute.toString().padLeft(2, '0')}";
+
+    try {
+      await sessionService.scheduleSession(
+        mentorId: mentorId,
+        userId: menteeId,
+        sessionType: selectedSessionType,
+        date: selectedDate!,
+        timeString: timeString,
+        notes: notesController.text,
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Session Scheduled Successfully!")),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Failed: $e")));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Schedule Mentorship Session'),
+        title: const Text("Schedule Mentorship Session"),
         backgroundColor: Colors.indigo,
       ),
       body: Padding(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(16),
         child: ListView(
           children: [
+            // Mentor Dropdown
+            DropdownButtonFormField<String>(
+              value: selectedMentorId,
+              decoration: const InputDecoration(
+                labelText: "Select Mentor",
+                border: OutlineInputBorder(),
+              ),
+              items:
+                  mentors
+                      .map<DropdownMenuItem<String>>(
+                        (m) => DropdownMenuItem<String>(
+                          value: m['id'] as String,
+                          child: Text(m['username']),
+                        ),
+                      )
+                      .toList(),
+              onChanged: (val) => setState(() => selectedMentorId = val),
+            ),
+            const SizedBox(height: 20),
+
             // Session Type Dropdown
             DropdownButtonFormField<String>(
-              initialValue: selectedSessionType,
-              items: sessionTypes.map((String type) {
-                return DropdownMenuItem<String>(
-                  value: type,
-                  child: Text(type),
-                );
-              }).toList(),
-              onChanged: (String? newValue) {
-                setState(() {
-                  selectedSessionType = newValue!;
-                });
-              },
+              value: selectedSessionType,
               decoration: const InputDecoration(
                 labelText: "Select Session Type",
                 border: OutlineInputBorder(),
               ),
+              items:
+                  sessionTypes
+                      .map<DropdownMenuItem<String>>(
+                        (e) =>
+                            DropdownMenuItem<String>(value: e, child: Text(e)),
+                      )
+                      .toList(),
+              onChanged: (val) => setState(() => selectedSessionType = val!),
             ),
             const SizedBox(height: 20),
 
@@ -104,7 +181,9 @@ class ScheduleSessionScreenState extends State<ScheduleSessionScreen> {
                       foregroundColor: Colors.black87,
                     ),
                     child: Text(
-                      "Select Date: ${selectedDate.toLocal().toString().split(' ')[0]}",
+                      selectedDate == null
+                          ? "Select Date"
+                          : "Date: ${selectedDate!.toLocal().toString().split(' ')[0]}",
                     ),
                   ),
                 ),
@@ -124,14 +203,18 @@ class ScheduleSessionScreenState extends State<ScheduleSessionScreen> {
                       backgroundColor: Colors.grey[200],
                       foregroundColor: Colors.black87,
                     ),
-                    child: Text("Select Time: ${selectedTime.format(context)}"),
+                    child: Text(
+                      selectedTime == null
+                          ? "Select Time"
+                          : "Time: ${selectedTime!.format(context)}",
+                    ),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 20),
 
-            // Mentor Notes
+            // Notes
             const Text(
               "Session Notes (Optional):",
               style: TextStyle(fontWeight: FontWeight.bold),
@@ -139,15 +222,15 @@ class ScheduleSessionScreenState extends State<ScheduleSessionScreen> {
             const SizedBox(height: 8),
             TextField(
               controller: notesController,
+              maxLines: 4,
               decoration: const InputDecoration(
-                hintText: "Add any specific topics or questions for your session...",
+                hintText: "Add topics or questions...",
                 border: OutlineInputBorder(),
               ),
-              maxLines: 4,
             ),
             const SizedBox(height: 30),
 
-            // Schedule Button
+            // Confirm Button
             ElevatedButton(
               onPressed: _scheduleSession,
               style: ElevatedButton.styleFrom(

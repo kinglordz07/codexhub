@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:codexhub01/mentorship/livecodereview_screen.dart';
-import 'package:codexhub01/mentorship/menteemessaging_screen.dart';
 import 'package:codexhub01/mentorship/resourcelibrary_screen.dart';
 import 'package:codexhub01/mentorship/performanceanalytics_screen.dart';
-import 'package:codexhub01/mentorship/schedulesession_screen.dart';
 import 'package:codexhub01/mentorship/progresstrackerscreen.dart';
-import 'package:codexhub01/parts/friendlist.dart';
-import 'package:codexhub01/parts/profilescreen.dart'; // Add this import
-// Add if you have theme manager
+import 'package:codexhub01/parts/profilescreen.dart';
+import 'package:codexhub01/mentorship/friendlst.dart';
+import 'package:codexhub01/mentorship/session_list.dart';
 
 class MentorDashboardScreen extends StatelessWidget {
+  MentorDashboardScreen({super.key});
+
   final List<Map<String, dynamic>> mentorFeatures = [
     {
       'title': 'Progress Tracker',
@@ -26,16 +26,7 @@ class MentorDashboardScreen extends StatelessWidget {
       'icon': Icons.code,
       'route': LiveCodeReviewScreen(),
     },
-    {
-      'title': 'Schedule Sessions',
-      'icon': Icons.calendar_today,
-      'route': ScheduleSessionScreen(),
-    },
-    {
-      'title': 'Mentee Messaging',
-      'icon': Icons.message,
-      'route': MenteeMessagingScreen(),
-    },
+
     {
       'title': 'Analytics',
       'icon': Icons.analytics,
@@ -44,16 +35,14 @@ class MentorDashboardScreen extends StatelessWidget {
     {
       'title': 'Friend List',
       'icon': Icons.smart_toy_outlined,
-      'route': FriendList(),
+      'route': MentorFriendPage(),
     },
     {
-      'title': 'My Profile',
-      'icon': Icons.person,
-      'route': ProfileScreen(), // Add profile to dashboard
+      'title': 'Session Scheduling',
+      'icon': Icons.calendar_today,
+      'route': SessionListScreen(),
     },
   ];
-
-  MentorDashboardScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -61,26 +50,23 @@ class MentorDashboardScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Mentor Dashboard'),
         centerTitle: true,
-        elevation: 4,
         backgroundColor: Colors.indigo,
+        elevation: 4,
         automaticallyImplyLeading: false,
         actions: [
-          // Add profile icon to app bar
           IconButton(
             icon: const Icon(Icons.person),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const ProfileScreen()),
-              );
-            },
+            onPressed:
+                () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                ),
             tooltip: "Profile Settings",
           ),
         ],
       ),
       body: Column(
         children: [
-          // Welcome message
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(20),
@@ -110,7 +96,6 @@ class MentorDashboardScreen extends StatelessWidget {
               ],
             ),
           ),
-
           Expanded(
             child: Padding(
               padding: const EdgeInsets.all(16.0),
@@ -123,10 +108,16 @@ class MentorDashboardScreen extends StatelessWidget {
                   childAspectRatio: 1,
                 ),
                 itemBuilder: (context, index) {
+                  final feature = mentorFeatures[index];
                   return DashboardTile(
-                    title: mentorFeatures[index]['title'],
-                    iconData: mentorFeatures[index]['icon'],
-                    screen: mentorFeatures[index]['route'],
+                    title: feature['title'],
+                    iconData: feature['icon'],
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => feature['route']),
+                      );
+                    },
                   );
                 },
               ),
@@ -141,23 +132,19 @@ class MentorDashboardScreen extends StatelessWidget {
 class DashboardTile extends StatelessWidget {
   final String title;
   final IconData iconData;
-  final Widget screen;
+  final VoidCallback onTap;
 
   const DashboardTile({
     super.key,
     required this.title,
     required this.iconData,
-    required this.screen,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: () {
-        Navigator.of(
-          context,
-        ).push(MaterialPageRoute(builder: (context) => screen));
-      },
+      onTap: onTap,
       child: Card(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         elevation: 6,

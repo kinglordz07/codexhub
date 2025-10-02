@@ -10,6 +10,7 @@ import 'package:codexhub01/parts/log_in.dart';
 import 'package:codexhub01/utils/resetpasscallback.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:codexhub01/utils/forgotpass.dart';
+import 'mentorship/schedulesession_screen.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 final supabase = Supabase.instance.client;
@@ -143,6 +144,11 @@ class DashboardScreen extends StatelessWidget {
       'title': 'Learning Tools',
       'icon': Icons.book_outlined,
       'route': LearningTools(),
+    },
+    {
+      'title': 'Schedule Sessions',
+      'icon': Icons.calendar_today,
+      'route': ScheduleSessionScreen(),
     },
   ];
 

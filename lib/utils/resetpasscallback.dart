@@ -28,8 +28,9 @@ class _ResetPasswordCallbackState extends State<ResetPasswordCallback> {
 
       final settings = route.settings;
       if (settings.arguments == null) throw Exception('No arguments found');
-      if (settings.arguments is! Uri)
+      if (settings.arguments is! Uri) {
         throw Exception('Arguments are not a Uri');
+      }
 
       final Uri deepLink = settings.arguments as Uri;
       final String? token = deepLink.queryParameters['token'];

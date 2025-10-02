@@ -217,7 +217,7 @@ class _SignUpState extends State<SignUp> {
 
                   // Role Dropdown
                   DropdownButtonFormField<String>(
-                    value: _selectedRole,
+                    initialValue: _selectedRole,
                     onChanged:
                         _isLoading
                             ? null
