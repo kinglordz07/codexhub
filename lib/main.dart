@@ -9,18 +9,18 @@ import 'package:codexhub01/parts/log_in.dart';
 import 'package:codexhub01/utils/resetpasscallback.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:codexhub01/utils/forgotpass.dart';
-import 'mentorship/schedulesession_screen.dart';
 import 'package:codexhub01/mentorship/friendlst.dart';
 import 'package:codexhub01/parts/create_live_lobby.dart';
+import 'package:codexhub01/mentorship/schedulesession_screen.dart';
+import 'package:codexhub01/parts/intro_screen.dart'; // ✅ make sure this path matches your file
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
-final supabase = Supabase.instance.client;
+late final SupabaseClient supabase;
 final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.light);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Set up error handling
   FlutterError.onError = (FlutterErrorDetails details) {
     debugPrint('Caught error: ${details.exception}');
   };
@@ -29,18 +29,13 @@ Future<void> main() async {
   final isDark = prefs.getBool('isDarkMode') ?? false;
   themeNotifier.value = isDark ? ThemeMode.dark : ThemeMode.light;
 
-  // Initialize Supabase
   try {
     const url = 'https://ohvelhlrehojqrvaqsim.supabase.co';
     const anonKey =
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9odmVsaGxyZWhvanFydmFxc2ltIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ0ODExMTIsImV4cCI6MjA3MDA1NzExMn0.qo4Cd5B8IzcYZ-I5aVDsqYo3l1DAwwWF_fauNAVu1BE';
 
-    assert(
-      url.isNotEmpty && anonKey.isNotEmpty,
-      'Supabase credentials are missing',
-    );
-
     await Supabase.initialize(url: url, anonKey: anonKey);
+    supabase = Supabase.instance.client;
     debugPrint('Supabase initialized successfully');
   } catch (e, stackTrace) {
     debugPrint('Failed to initialize Supabase: $e');
@@ -79,19 +74,20 @@ class CodeHubApp extends StatelessWidget {
               backgroundColor: Colors.indigo,
               foregroundColor: Colors.white,
             ),
-            cardTheme: CardThemeData(
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
           ),
           themeMode: themeMode,
-          initialRoute: '/',
+
+          // ✅ Start with IntroScreen first
+          initialRoute: '/intro',
+
           routes: {
+            '/intro': (context) => const IntroScreen(),
             '/': (context) => const SignIn(),
+            '/dashboard': (context) => DashboardScreen(),
             '/forgot-password': (context) => const ForgotPasswordScreen(),
           },
+
+          // for password reset callback
           onGenerateRoute: (settings) {
             if (settings.name == '/reset-callback') {
               final Uri? uri = settings.arguments as Uri?;
@@ -167,7 +163,6 @@ class DashboardScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('CodeXHub Dashboard'),
         automaticallyImplyLeading: false,
-        actions: [],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
