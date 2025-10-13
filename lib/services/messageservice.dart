@@ -1,13 +1,21 @@
+import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class MessageService {
   final SupabaseClient supabase = Supabase.instance.client;
 
-  String get currentUserId => supabase.auth.currentUser!.id;
+  /// Keep track of seen messages to avoid duplicates in streams
+  final Set<String> _seenMessageIds = {};
 
-  /// Get all messages between current user and other user
+  /// Null-safe current user ID
+  String? get currentUserId => supabase.auth.currentUser?.id;
+
+  /// --------------------------
+  /// Fetch all messages between current user and another user
+  /// --------------------------
   Future<List<Map<String, dynamic>>> getMessages(String otherUserId) async {
     final userId = currentUserId;
+    if (userId == null) return [];
 
     final data = await supabase
         .from('mentor_messages')
@@ -17,34 +25,97 @@ class MessageService {
         )
         .order('created_at', ascending: true);
 
-    return List<Map<String, dynamic>>.from(data as List);
+    final messages = List<Map<String, dynamic>>.from(data as List);
+
+    // Track seen IDs
+    _seenMessageIds.addAll(messages.map((m) => m['id'].toString()));
+    return messages;
   }
 
-  /// Stream for realtime messages
+  /// --------------------------
+  /// Real-time per-conversation stream
+  /// --------------------------
   Stream<List<Map<String, dynamic>>> messageStream(String otherUserId) {
     final userId = currentUserId;
+    if (userId == null) return const Stream.empty();
 
-    return supabase.from('mentor_messages').stream(primaryKey: ['id']).map((
-      List<Map<String, dynamic>> allMessages,
-    ) {
-      return allMessages.where((msg) {
-        final sender = msg['sender_id'].toString();
-        final receiver = msg['receiver_id'].toString();
+    // Stream of raw changes from Supabase
+    final channel = supabase.from('mentor_messages').stream(primaryKey: ['id']);
+
+    return channel.map((changes) {
+      // Filter relevant messages for this conversation
+      final relevant = changes.where((msg) {
+        final sender = msg['sender_id']?.toString();
+        final receiver = msg['receiver_id']?.toString();
         return (sender == userId && receiver == otherUserId) ||
             (sender == otherUserId && receiver == userId);
       }).toList();
+
+      // Add only unseen messages
+      final newMessages = relevant.where((msg) {
+        final id = msg['id'].toString();
+        if (_seenMessageIds.contains(id)) return false;
+        _seenMessageIds.add(id);
+        return true;
+      }).toList();
+
+      // Sort by created_at
+      newMessages.sort((a, b) =>
+          DateTime.parse(a['created_at']).compareTo(DateTime.parse(b['created_at'])));
+
+      return newMessages;
     });
   }
 
-  /// Send message
-  Future<void> sendMessage(String otherUserId, String message) async {
+  /// --------------------------
+  /// Global stream for all messages involving current user
+  /// --------------------------
+  Stream<List<Map<String, dynamic>>> globalMessageStream() {
     final userId = currentUserId;
+    if (userId == null) return const Stream.empty();
 
-    await supabase.from('mentor_messages').insert({
-      'sender_id': userId,
-      'receiver_id': otherUserId,
-      'message': message,
-      'created_at': DateTime.now().toUtc().toIso8601String(),
+    final channel = supabase.from('mentor_messages').stream(primaryKey: ['id']);
+
+    return channel.map((changes) {
+      final newMessages = changes.where((msg) {
+        final sender = msg['sender_id']?.toString();
+        final receiver = msg['receiver_id']?.toString();
+        final id = msg['id'].toString();
+        final relevant = sender == userId || receiver == userId;
+        if (relevant && !_seenMessageIds.contains(id)) {
+          _seenMessageIds.add(id);
+          return true;
+        }
+        return false;
+      }).toList();
+
+      newMessages.sort((a, b) =>
+          DateTime.parse(a['created_at']).compareTo(DateTime.parse(b['created_at'])));
+
+      return newMessages;
     });
   }
+
+  /// --------------------------
+  /// Send a message
+  /// --------------------------
+  Future<Map<String, dynamic>?> sendMessage(String otherUserId, String message) async {
+  final userId = currentUserId;
+  if (userId == null) return null;
+
+  final inserted = await supabase.from('mentor_messages').insert({
+    'sender_id': userId,
+    'receiver_id': otherUserId,
+    'message': message,
+    'created_at': DateTime.now().toUtc().toIso8601String(),
+  }).select();
+
+  if (inserted.isNotEmpty) {
+    final msg = inserted[0]; // removed unnecessary cast
+    _seenMessageIds.add(msg['id'].toString());
+    return msg;
+  }
+
+  return null;
+}
 }

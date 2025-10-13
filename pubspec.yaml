@@ -30,7 +30,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  supabase_flutter: ^2.9.0
+  supabase_flutter: ^2.10.3
   flutter_code_editor: ^0.3.0
   highlight: ^0.7.0
   image_picker: ^1.1.2 
@@ -48,6 +48,10 @@ dependencies:
   shared_preferences: ^2.5.3
   icon: ^2.2.1
   flutter_highlight: ^0.7.0
+  flutter_webrtc: ^1.2.0
+  webview_flutter: ^4.13.0
+  firebase_core: ^4.1.1
+  firebase_messaging: ^16.0.2
 
 dev_dependencies:
   flutter_test:

@@ -30,96 +30,203 @@ class _CollabRoomScreenState extends State<CollabRoomScreen>
   final ScrollController _snippetScrollController = ScrollController();
   bool _isLoadingMessages = false;
   bool _isLoadingSnippets = true;
+  bool _isLoading = true;
   String? _creatorId;
-  // ignore: unused_field
-  List<Map<String, dynamic>> _allFriends = [];
-  // ignore: unused_field
-  final List<Map<String, dynamic>> _nonFriends = [];
-  // ignore: unused_field
-  List<Map<String, dynamic>> _friendRequests = [];
+  bool _isCreator = false;
+  List<Map<String, dynamic>> _members = [];
 
   @override
   void initState() {
     super.initState();
-
     _tabController = TabController(length: 2, vsync: this);
-
-    _loadMessages();
-    _loadSnippets();
-    _loadFriendsData();
-    _loadRoomDetails();
-    _setupRealtimeSubscriptions();
+    _initializeRoom();
   }
 
-  ImageProvider _getAvatarImage(String? avatarUrl) {
-    if (avatarUrl != null && avatarUrl.isNotEmpty) {
-      return NetworkImage(avatarUrl);
+  Future<void> _initializeRoom() async {
+    try {
+      await _loadRoomDetails();
+      await _loadMessages();
+      await _loadMembers();
+      await _loadSnippets();
+      _setupRealtimeSubscriptions();
+      _checkIfCreator();
+    } catch (e) {
+      _showError('Failed to initialize room: ${e.toString()}');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
-    return const AssetImage('assets/default_avatar.png');
-  }
-
-  String _getAvatarText(String? name) {
-    if (name != null && name.isNotEmpty) {
-      return name[0].toUpperCase();
-    }
-    return '?';
   }
 
   Future<void> _loadRoomDetails() async {
     try {
-      final response =
-          await supabase
-              .from('rooms')
-              .select('creator_id')
-              .eq('id', widget.roomId)
-              .single();
+      final response = await supabase
+          .from('rooms')
+          .select()
+          .eq('id', widget.roomId)
+          .single();
+      
+      if (mounted) {
+        setState(() {
+          _creatorId = response['creator_id'];
+        });
+      }
+    } catch (e) {
+      _showError('Failed to load room details: ${e.toString()}');
+    }
+  }
 
-      setState(() {
-        _creatorId = response['creator_id'];
+  Future<void> _loadMembers() async {
+    try {
+      final response = await supabase
+          .from('room_members')
+          .select('user_id, role, joined_at')
+          .eq('room_id', widget.roomId);
+
+      // Extract user IDs and fetch their profiles
+      final userIds = response.map((member) => member['user_id'] as String).toList();
+      if (userIds.isNotEmpty) {
+        await _fetchUserBatch(userIds);
+      }
+
+      // Build members list with profile data
+      final membersWithProfiles = <Map<String, dynamic>>[];
+      for (var member in response) {
+        final userId = member['user_id'] as String;
+        final userData = _userData[userId] ?? {
+          'name': 'User ${userId.substring(0, 8)}',
+          'avatar_url': '',
+          'id': userId,
+        };
+        
+        membersWithProfiles.add({
+          ...member,
+          'profiles': userData,
+        });
+      }
+
+      if (mounted) {
+        setState(() {
+          _members = membersWithProfiles;
+        });
+      }
+    } catch (e) {
+      _showError('Failed to load members: ${e.toString()}');
+    }
+  }
+
+  Future<void> _loadMessages() async {
+    try {
+      if (mounted) {
+        setState(() => _isLoadingMessages = true);
+      }
+
+      final response = await supabase
+          .from('room_messages')
+          .select('*')
+          .eq('room_id', widget.roomId)
+          .order('created_at', ascending: true); // Changed to ascending for proper chat flow
+
+      // Load user data for messages
+      final userIds = response.map((msg) => msg['user_id'] as String).toSet().toList();
+      if (userIds.isNotEmpty) {
+        await _fetchUserBatch(userIds);
+      }
+
+      final messagesWithUserData = <Map<String, dynamic>>[];
+      for (var message in response) {
+        final userId = message['user_id'] as String;
+        final userData = _userData[userId] ?? {
+          'name': 'User ${userId.substring(0, 8)}',
+          'avatar_url': '',
+          'id': userId,
+        };
+        
+        messagesWithUserData.add({
+          ...message,
+          'sender_name': userData['name'],
+          'sender_avatar': userData['avatar_url'],
+        });
+      }
+
+      if (mounted) {
+        setState(() {
+          _messages = messagesWithUserData;
+          _isLoadingMessages = false;
+        });
+      }
+
+      // Scroll to bottom to show latest messages
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_messageScrollController.hasClients && _messages.isNotEmpty) {
+          _messageScrollController.jumpTo(
+            _messageScrollController.position.maxScrollExtent,
+          );
+        }
       });
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error loading room details: $e')));
+      if (mounted) {
+        setState(() => _isLoadingMessages = false);
+      }
+      _showError('Error loading messages: ${e.toString()}');
+    }
+  }
+
+  void _checkIfCreator() {
+    final user = supabase.auth.currentUser;
+    if (user != null && _creatorId != null) {
+      if (mounted) {
+        setState(() {
+          _isCreator = user.id == _creatorId;
+        });
+      }
     }
   }
 
   void _setupRealtimeSubscriptions() {
+    // Messages subscription
     supabase
         .channel('room_${widget.roomId}_messages')
         .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
+          event: PostgresChangeEvent.all,
           schema: 'public',
-          table: 'messages',
+          table: 'room_messages',
           filter: PostgresChangeFilter(
             type: PostgresChangeFilterType.eq,
             column: 'room_id',
             value: widget.roomId,
           ),
           callback: (payload) {
-            _fetchUserData(payload.newRecord['sender_id']).then((userData) {
-              setState(() {
-                _messages.add({
-                  ...payload.newRecord,
-                  'sender_name': userData['name'],
-                  'sender_avatar': userData['avatar'],
+            if (payload.eventType == PostgresChangeEvent.insert) {
+              _fetchUserData(payload.newRecord['user_id']).then((userData) {
+                if (mounted) {
+                  setState(() {
+                    _messages.add({
+                      ...payload.newRecord,
+                      'sender_name': userData['name'],
+                      'sender_avatar': userData['avatar_url'],
+                    });
+                  });
+                }
+
+                // Scroll to bottom when new message arrives
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (_messageScrollController.hasClients) {
+                    _messageScrollController.animateTo(
+                      _messageScrollController.position.maxScrollExtent,
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeOut,
+                    );
+                  }
                 });
               });
-
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (_messageScrollController.hasClients) {
-                  _messageScrollController.animateTo(
-                    _messageScrollController.position.maxScrollExtent,
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeOut,
-                  );
-                }
-              });
-            });
+            }
           },
         )
         .subscribe();
 
+    // Snippets subscription
     supabase
         .channel('room_${widget.roomId}_snippets')
         .onPostgresChanges(
@@ -133,13 +240,15 @@ class _CollabRoomScreenState extends State<CollabRoomScreen>
           ),
           callback: (payload) {
             _fetchUserData(payload.newRecord['user_id']).then((userData) {
-              setState(() {
-                _snippets.add({
-                  ...payload.newRecord,
-                  'user_name': userData['name'],
-                  'user_avatar': userData['avatar'],
+              if (mounted) {
+                setState(() {
+                  _snippets.add({
+                    ...payload.newRecord,
+                    'user_name': userData['name'],
+                    'user_avatar': userData['avatar_url'],
+                  });
                 });
-              });
+              }
 
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (_snippetScrollController.hasClients) {
@@ -156,61 +265,46 @@ class _CollabRoomScreenState extends State<CollabRoomScreen>
         .subscribe();
   }
 
-  Future<void> _loadFriendsData() async {
-    try {
-      final currentUser = supabase.auth.currentUser;
-      if (currentUser == null) return;
-
-      final friendsResponse = await supabase
-          .from('friends')
-          .select('*')
-          .eq('user_id', currentUser.id)
-          .eq('status', 'accepted');
-
-      final requestsResponse = await supabase
-          .from('friend_requests')
-          .select('*')
-          .eq('receiver_id', currentUser.id)
-          .eq('status', 'pending');
-
-      setState(() {
-        _allFriends = List<Map<String, dynamic>>.from(friendsResponse);
-        _friendRequests = List<Map<String, dynamic>>.from(requestsResponse);
-      });
-    } catch (e) {
-      if (kDebugMode) {
-        print('Error loading friends data: $e');
-      }
-    }
-  }
-
   Future<void> _fetchUserBatch(List<String> userIds) async {
     if (userIds.isEmpty) return;
 
     try {
       final response = await supabase
           .from('profiles')
-          .select('id, username, full_name, avatar_url')
+          .select('id, username, avatar_url')
           .inFilter('id', userIds);
 
       for (var profile in response) {
         _userData[profile['id']] = {
-          'name': profile['full_name'] ?? profile['username'] ?? 'Unknown User',
-          'avatar': profile['avatar_url'] ?? '',
+          'name': profile['username'] ?? 'Unknown User',
+          'avatar_url': profile['avatar_url'] ?? '',
           'id': profile['id'],
         };
       }
+
+      // Create entries for any missing users
+      for (var userId in userIds) {
+        if (!_userData.containsKey(userId)) {
+          _userData[userId] = {
+            'name': 'User ${userId.substring(0, 8)}',
+            'avatar_url': '',
+            'id': userId,
+          };
+        }
+      }
     } catch (e) {
       if (kDebugMode) {
-        print('Error fetching users batch: $e');
+        print('Error in _fetchUserBatch: $e');
+      }
+      // If profile fetch fails, create basic entries
+      for (var userId in userIds) {
+        _userData[userId] = {
+          'name': 'User ${userId.substring(0, 8)}',
+          'avatar_url': '',
+          'id': userId,
+        };
       }
     }
-  }
-
-  Future<void> _loadUserDataForMessages(List<dynamic> messages) async {
-    final userIds =
-        messages.map((msg) => msg['sender_id'] as String).toSet().toList();
-    await _fetchUserBatch(userIds);
   }
 
   Future<Map<String, dynamic>> _fetchUserData(String userId) async {
@@ -219,308 +313,314 @@ class _CollabRoomScreenState extends State<CollabRoomScreen>
     }
 
     try {
-      final profileResponse =
-          await supabase
-              .from('profiles')
-              .select('username, full_name, avatar_url')
-              .eq('id', userId)
-              .maybeSingle();
-
-      String name = 'Unknown User';
-      String avatarUrl = '';
+      // Try profiles table without full_name
+      final profileResponse = await supabase
+          .from('profiles')
+          .select('username, avatar_url')
+          .eq('id', userId)
+          .maybeSingle();
 
       if (profileResponse != null) {
-        name =
-            profileResponse['full_name'] ??
-            profileResponse['username'] ??
-            'Unknown User';
-        avatarUrl = profileResponse['avatar_url'] ?? '';
-      } else {
-        final userResponse = await supabase.auth.admin.getUserById(userId);
-        if (userResponse.user != null && userResponse.user!.email != null) {
-          name = userResponse.user!.email!;
-        }
+        final userData = {
+          'name': profileResponse['username'] ?? 'Unknown User',
+          'avatar_url': profileResponse['avatar_url'] ?? '',
+          'id': userId,
+        };
+        _userData[userId] = userData;
+        return userData;
       }
-
-      final userData = {'name': name, 'avatar': avatarUrl, 'id': userId};
-      _userData[userId] = userData;
-      return userData;
     } catch (e) {
-      return {'name': 'Unknown User', 'avatar': '', 'id': userId};
+      if (kDebugMode) {
+        print('Error fetching user data for $userId: $e');
+      }
     }
+
+    // Fallback
+    final userData = {
+      'name': 'User ${userId.substring(0, 8)}',
+      'avatar_url': '',
+      'id': userId,
+    };
+    _userData[userId] = userData;
+    return userData;
   }
 
-  Future<void> _loadMessages() async {
-    try {
-      setState(() => _isLoadingMessages = true);
-
-      final response = await supabase
-          .from('messages')
-          .select('id, content, sender_id, created_at')
-          .eq('room_id', widget.roomId)
-          .order('created_at', ascending: true);
-
-      await _loadUserDataForMessages(response);
-
-      final messagesWithUserData = <Map<String, dynamic>>[];
-      for (var message in response) {
-        final userData =
-            _userData[message['sender_id']] ??
-            {'name': 'Unknown User', 'avatar': '', 'id': message['sender_id']};
-        messagesWithUserData.add({
-          ...message,
-          'sender_name': userData['name'],
-          'sender_avatar': userData['avatar'],
-        });
-      }
-
-      setState(() {
-        _messages = messagesWithUserData;
-        _isLoadingMessages = false;
-      });
-
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_messageScrollController.hasClients) {
-          _messageScrollController.jumpTo(
-            _messageScrollController.position.maxScrollExtent,
-          );
-        }
-      });
-    } catch (e) {
-      setState(() => _isLoadingMessages = false);
+  Future<void> _copyRoomId() async {
+    await Clipboard.setData(ClipboardData(text: widget.roomId));
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error loading messages: ${e.toString()}')),
+        const SnackBar(content: Text('Room ID copied to clipboard!')),
       );
     }
   }
 
-  /// Delete the room (optional roomId). Adjust Supabase table/schema as needed.
   Future<void> _deleteRoom([String? roomId]) async {
-    // ignore: unused_local_variable
     final id = roomId ?? widget.roomId;
     final confirm = await showDialog<bool>(
       context: context,
-      builder:
-          (ctx) => AlertDialog(
-            title: const Text('Delete room?'),
-            content: const Text(
-              'Are you sure you want to delete this room? This cannot be undone.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Delete'),
-              ),
-            ],
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete room?'),
+        content: const Text(
+          'Are you sure you want to delete this room? This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
           ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.red,
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
     );
 
     if (confirm != true) return;
 
     try {
-      // Example Supabase deletion — adapt table name and column if different
-      // final res = await supabase.from('rooms').delete().eq('id', id);
-      // handle response...
+      await supabase.from('rooms').delete().eq('id', id);
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Room deleted')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Room deleted')));
       Navigator.of(context).maybePop();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to delete room: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete room: $e')));
     }
   }
 
-  /// Show options for a user (signature matches your call sites)
-  void _showUserOptions(BuildContext ctx, Map<String, dynamic> userData) {
-    showModalBottomSheet(
-      context: ctx,
-      builder: (sheetCtx) {
-        return SafeArea(
-          child: Wrap(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.person),
-                title: const Text('View profile'),
-                onTap: () {
-                  Navigator.pop(sheetCtx);
-                  // Navigate to profile screen (implement navigation)
-                  // Navigator.pushNamed(ctx, '/profile', arguments: userData['id']);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.copy),
-                title: const Text('Copy user ID'),
-                onTap: () {
-                  Clipboard.setData(
-                    ClipboardData(text: userData['id']?.toString() ?? ''),
-                  );
-                  Navigator.pop(sheetCtx);
-                  ScaffoldMessenger.of(ctx).showSnackBar(
-                    const SnackBar(content: Text('Copied user id')),
-                  );
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.remove_circle),
-                title: const Text('Remove from room'),
-                onTap: () async {
-                  Navigator.pop(sheetCtx);
-                  final userId = userData['id']?.toString();
-                  if (userId != null) {
-                    await _removeUserFromRoom(userId);
-                  }
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.cancel),
-                title: const Text('Cancel'),
-                onTap: () => Navigator.pop(sheetCtx),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _removeUserFromRoom(String userId) async {
-    try {
-      // Example Supabase deletion — adapt as needed
-      // await supabase.from('room_members').delete().eq('room_id', widget.roomId).eq('user_id', userId);
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('User removed')));
-      // optionally refresh member list
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Remove failed: $e')));
-    }
-  }
-
-  /// Send a message. Accepts optional text or uses _messageController.
-  Future<void> _sendMessage([String? text]) async {
-    final content = (text ?? _messageController.text).trim();
+  Future<void> _sendMessage() async {
+    final content = _messageController.text.trim();
     if (content.isEmpty) return;
 
     final userId = supabase.auth.currentUser?.id;
-    final currentUserData = userId != null ? _userData[userId] : null;
+    if (userId == null) return;
 
-    // optimistic UI update: add to local list and scroll
+    // Optimistic UI update
     final newMessage = {
       'id': DateTime.now().millisecondsSinceEpoch.toString(),
       'content': content,
-      'sender_id': supabase.auth.currentUser?.id ?? 'unknown',
+      'user_id': userId,
+      'room_id': widget.roomId,
       'created_at': DateTime.now().toIso8601String(),
-      'sender_name': currentUserData?['name'] ?? 'You',
-      'sender_avatar': currentUserData?['avatar'] ?? '',
+      'sender_name': _userData[userId]?['name'] ?? 'You',
+      'sender_avatar': _userData[userId]?['avatar_url'] ?? '',
     };
 
-    setState(() {
-      _messages.add(newMessage);
-      _messageController.clear();
-    });
+    if (mounted) {
+      setState(() {
+        _messages.add(newMessage);
+        _messageController.clear();
+      });
+    }
 
+    // Scroll to bottom to show new message
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_messageScrollController.hasClients) {
-        _messageScrollController.jumpTo(
+        _messageScrollController.animateTo(
           _messageScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
         );
       }
     });
 
     try {
-      // Example Supabase insert — adapt table name/columns
-      // await supabase.from('messages').insert([{
-      //   'room_id': widget.roomId,
-      //   'sender_id': supabase.auth.currentUser!.id,
-      //   'content': content,
-      // }]);
-      // Optionally refresh messages or handle returned message id
+      await supabase.from('room_messages').insert({
+        'room_id': widget.roomId,
+        'user_id': userId,
+        'content': content,
+      });
     } catch (e) {
-      // On failure, show error (optionally remove optimistic message or mark as failed)
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Send failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Send failed: $e')));
+      
+      // Remove optimistic update if failed
+      if (mounted) {
+        setState(() {
+          _messages.removeWhere((msg) => msg['id'] == newMessage['id']);
+        });
+      }
     }
   }
 
-  /// Share/copy a code snippet. Accepts snippet text (optional).
-  Future<void> _shareSnippet([String? snippetText]) async {
-    final text = snippetText ?? '/* snippet not provided */';
+  Future<void> _shareSnippet() async {
+    final code = _snippetController.text.trim();
+    if (code.isEmpty) return;
+
+    final userId = supabase.auth.currentUser?.id;
+    if (userId == null) return;
+
     try {
-      await Clipboard.setData(ClipboardData(text: text));
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Snippet copied to clipboard')),
-      );
-      // To invoke OS share dialog, add share_plus and call Share.share(text);
+      await supabase.from('snippets').insert({
+        'room_id': widget.roomId,
+        'user_id': userId,
+        'code': code,
+      });
+      _snippetController.clear();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Share failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Share failed: $e')));
     }
   }
 
   Future<void> _loadSnippets() async {
     try {
-      setState(() => _isLoadingSnippets = true);
+      if (mounted) {
+        setState(() => _isLoadingSnippets = true);
+      }
 
       final response = await supabase
           .from('snippets')
-          .select('id, code, user_id, created_at')
+          .select('*')
           .eq('room_id', widget.roomId)
           .order('created_at', ascending: true);
 
-      final userIds =
-          response
-              .map((snippet) => snippet['user_id'] as String)
-              .toSet()
-              .toList();
-      await _fetchUserBatch(userIds);
+      // Load user data for snippets
+      final userIds = response.map((snippet) => snippet['user_id'] as String).toSet().toList();
+      if (userIds.isNotEmpty) {
+        await _fetchUserBatch(userIds);
+      }
 
       final snippetsWithUserData = <Map<String, dynamic>>[];
       for (var snippet in response) {
-        final userData =
-            _userData[snippet['user_id']] ??
-            {'name': 'Unknown User', 'avatar': '', 'id': snippet['user_id']};
+        final userId = snippet['user_id'] as String;
+        final userData = _userData[userId] ?? {
+          'name': 'User ${userId.substring(0, 8)}',
+          'avatar_url': '',
+          'id': userId,
+        };
+        
         snippetsWithUserData.add({
           ...snippet,
           'user_name': userData['name'],
-          'user_avatar': userData['avatar'],
+          'user_avatar': userData['avatar_url'],
         });
       }
 
-      setState(() {
-        _snippets = snippetsWithUserData;
-        _isLoadingSnippets = false;
-      });
-
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_snippetScrollController.hasClients) {
-          _snippetScrollController.jumpTo(
-            _snippetScrollController.position.maxScrollExtent,
-          );
-        }
-      });
+      if (mounted) {
+        setState(() {
+          _snippets = snippetsWithUserData;
+          _isLoadingSnippets = false;
+        });
+      }
     } catch (e) {
-      setState(() => _isLoadingSnippets = false);
+      if (mounted) {
+        setState(() => _isLoadingSnippets = false);
+      }
+      _showError('Error loading snippets: ${e.toString()}');
+    }
+  }
+
+  void _showError(String message) {
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error loading snippets: ${e.toString()}')),
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Colors.red,
+        ),
       );
     }
+  }
+
+  Widget _buildAvatar(Map<String, dynamic> userData, {double radius = 20}) {
+    final String name = (userData['name'] ?? 'User') as String;
+    final String? avatarUrl = userData['avatar_url'] as String?;
+    
+    // If we have a valid avatar URL, try to use it
+    if (avatarUrl != null && avatarUrl.isNotEmpty) {
+      try {
+        return CircleAvatar(
+          radius: radius,
+          backgroundImage: NetworkImage(avatarUrl),
+          onBackgroundImageError: (exception, stackTrace) {
+            // Fall through to colored avatar if image fails
+          },
+        );
+      } catch (e) {
+        // Fall through to colored avatar if any error
+      }
+    }
+    
+    // Always use colored circle with initial (NO ASSET DEPENDENCY)
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: _getAvatarColor(name),
+      child: Text(
+        _getAvatarInitial(name),
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: radius * 0.6,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+  Color _getAvatarColor(String name) {
+    // Simple consistent color based on first character
+    final firstChar = name.isNotEmpty ? name[0].toLowerCase() : 'a';
+    final colorMap = {
+      'a': Colors.blue,
+      'b': Colors.red,
+      'c': Colors.green,
+      'd': Colors.orange,
+      'e': Colors.purple,
+      'f': Colors.teal,
+      'g': Colors.indigo,
+      'h': Colors.brown,
+      'i': Colors.blueGrey,
+      'j': Colors.deepOrange,
+      'k': Colors.lightBlue,
+      'l': Colors.lightGreen,
+      'm': Colors.pink,
+      'n': Colors.deepPurple,
+      'o': Colors.cyan,
+      'p': Colors.amber,
+      'q': Colors.lime,
+      'r': Colors.yellow,
+      's': Colors.grey,
+      't': Colors.blue,
+      'u': Colors.red,
+      'v': Colors.green,
+      'w': Colors.orange,
+      'x': Colors.purple,
+      'y': Colors.teal,
+      'z': Colors.indigo,
+      '0': Colors.blue,
+      '1': Colors.red,
+      '2': Colors.green,
+      '3': Colors.orange,
+      '4': Colors.purple,
+      '5': Colors.teal,
+      '6': Colors.indigo,
+      '7': Colors.brown,
+      '8': Colors.blueGrey,
+      '9': Colors.deepOrange,
+    };
+    
+    return colorMap[firstChar] ?? Colors.blue;
+  }
+
+  String _getAvatarInitial(String name) {
+    if (name.isNotEmpty) {
+      return name[0].toUpperCase();
+    }
+    return '?';
+  }
+
+  @override
+  void dispose() {
+    _messageController.dispose();
+    _snippetController.dispose();
+    _tabController.dispose();
+    _messageScrollController.dispose();
+    _snippetScrollController.dispose();
+    supabase.removeAllChannels();
+    super.dispose();
   }
 
   @override
@@ -529,9 +629,42 @@ class _CollabRoomScreenState extends State<CollabRoomScreen>
 
     return Scaffold(
       appBar: AppBar(
-        title: Text("Room: ${widget.roomName}"),
+        title: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    widget.roomName,
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  GestureDetector(
+                    onTap: _copyRoomId,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          "ID: ${widget.roomId}",
+                          style: const TextStyle(fontSize: 12, color: Colors.white70),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(Icons.copy, size: 12, color: Colors.white70),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        centerTitle: false, // This makes the title left-aligned
         actions: [
-          if (_creatorId != null && _creatorId == supabase.auth.currentUser?.id)
+          // REMOVED: Copy Room ID icon button - now it's part of the title
+          if (_isCreator)
             IconButton(
               icon: const Icon(Icons.delete),
               onPressed: () {
@@ -553,16 +686,17 @@ class _CollabRoomScreenState extends State<CollabRoomScreen>
                             Navigator.pop(context);
                             _deleteRoom();
                           },
-                          child: const Text(
-                            "Delete",
-                            style: TextStyle(color: Colors.red),
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.red,
                           ),
+                          child: const Text("Delete"),
                         ),
                       ],
                     );
                   },
                 );
               },
+              tooltip: 'Delete Room',
             ),
         ],
         bottom: TabBar(
@@ -573,144 +707,238 @@ class _CollabRoomScreenState extends State<CollabRoomScreen>
           ],
         ),
       ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          // Chat Tab
-          Column(
-            children: [
-              Expanded(
-                child:
-                    _isLoadingMessages
-                        ? const Center(child: CircularProgressIndicator())
-                        : ListView.builder(
-                          controller: _messageScrollController,
-                          itemCount: _messages.length,
-                          itemBuilder: (context, index) {
-                            final msg = _messages[index];
-                            final isMe = msg['sender_id'] == currentUserId;
-                            final userData = {
-                              'name': msg['sender_name'],
-                              'avatar': msg['sender_avatar'],
-                              'id': msg['sender_id'],
-                            };
-
-                            return MessageBubble(
-                              message: msg,
-                              isMe: isMe,
-                              userData: userData,
-                              onAvatarTap:
-                                  () => _showUserOptions(context, userData),
-                              formatDate: _formatDate,
-                              getAvatarImage: _getAvatarImage,
-                              getAvatarText: _getAvatarText,
-                              currentUserId: currentUserId,
-                              allUserData: _userData,
-                            );
-                          },
-                        ),
-              ),
-              SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Row(
+      
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                Expanded(
+                  child: TabBarView(
+                    controller: _tabController,
                     children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _messageController,
-                          decoration: InputDecoration(
-                            hintText: "Enter message...",
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                            ),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(20),
+                      // Chat Tab
+                      Column(
+                        children: [
+                          // Members list with profile pictures
+                          Container(
+                            height: 70,
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            child: ListView.builder(
+                              scrollDirection: Axis.horizontal,
+                              itemCount: _members.length,
+                              itemBuilder: (context, index) {
+                                final member = _members[index];
+                                final userData = _userData[member['user_id']] ?? 
+                                    {'name': 'User ${member['user_id'].toString().substring(0, 8)}', 'avatar_url': ''};
+                                final isCreator = member['user_id'] == _creatorId;
+                                
+                                return Container(
+                                  margin: const EdgeInsets.only(right: 8),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Stack(
+                                        children: [
+                                          _buildAvatar(userData, radius: 20),
+                                          if (isCreator)
+                                            Positioned(
+                                              right: 0,
+                                              bottom: 0,
+                                              child: Container(
+                                                padding: const EdgeInsets.all(3),
+                                                decoration: const BoxDecoration(
+                                                  color: Colors.blue,
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: const Icon(
+                                                  Icons.star,
+                                                  color: Colors.white,
+                                                  size: 10,
+                                                ),
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 2),
+                                      SizedBox(
+                                        width: 44,
+                                        child: Text(
+                                          userData['name'],
+                                          style: const TextStyle(fontSize: 9),
+                                          overflow: TextOverflow.ellipsis,
+                                          textAlign: TextAlign.center,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
                             ),
                           ),
-                          onSubmitted: (_) => _sendMessage(),
-                        ),
+                          const Divider(height: 1),
+                    
+                          // Messages - Now with proper chat flow (latest at bottom)
+                          Expanded(
+                            child: _isLoadingMessages
+                                ? const Center(child: CircularProgressIndicator())
+                                : _messages.isEmpty
+                                    ? const Center(
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(Icons.chat, size: 64, color: Colors.grey),
+                                            SizedBox(height: 16),
+                                            Text('No messages yet'),
+                                          ],
+                                        ),
+                                      )
+                                    : ListView.builder(
+                                        controller: _messageScrollController,
+                                        itemCount: _messages.length,
+                                        // No reverse needed since we're ordering by ascending date
+                                        itemBuilder: (context, index) {
+                                          final msg = _messages[index];
+                                          final isMe = msg['user_id'] == currentUserId;
+                                          final userData = {
+                                            'name': msg['sender_name'],
+                                            'avatar_url': msg['sender_avatar'],
+                                            'id': msg['user_id'],
+                                          };
+
+                                          return MessageBubble(
+                                            message: msg,
+                                            isMe: isMe,
+                                            userData: userData,
+                                            formatDate: _formatDate,
+                                            buildAvatar: _buildAvatar,
+                                            currentUserId: currentUserId,
+                                          );
+                                        },
+                                      ),
+                          ),
+                          SafeArea(
+                            child: Padding(
+                              padding: const EdgeInsets.all(8.0),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: TextField(
+                                      controller: _messageController,
+                                      decoration: InputDecoration(
+                                        hintText: "Type a message...",
+                                        contentPadding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 12,
+                                        ),
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(20),
+                                        ),
+                                      ),
+                                      onSubmitted: (_) => _sendMessage(),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  IconButton(
+                                    icon: const Icon(Icons.send, color: Colors.indigo),
+                                    onPressed: _sendMessage,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.send, color: Colors.indigo),
-                        onPressed: _sendMessage,
+
+                      // Snippets Tab
+                      Column(
+                        children: [
+                          Expanded(
+                            child: _isLoadingSnippets
+                                ? const Center(child: CircularProgressIndicator())
+                                : _snippets.isEmpty
+                                    ? const Center(
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(Icons.code, size: 64, color: Colors.grey),
+                                            SizedBox(height: 16),
+                                            Text(
+                                              'No code snippets yet',
+                                              style: TextStyle(
+                                                fontSize: 18,
+                                                color: Colors.grey,
+                                              ),
+                                            ),
+                                            Text(
+                                              'Share your first code snippet!',
+                                              style: TextStyle(
+                                                color: Colors.grey,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      )
+                                    : ListView.builder(
+                                        controller: _snippetScrollController,
+                                        itemCount: _snippets.length,
+                                        itemBuilder: (context, index) {
+                                          final snip = _snippets[index];
+                                          final isMe = snip['user_id'] == currentUserId;
+                                          final userData = {
+                                            'name': snip['user_name'],
+                                            'avatar_url': snip['user_avatar'],
+                                            'id': snip['user_id'],
+                                          };
+
+                                          return SnippetBubble(
+                                            snippet: snip,
+                                            isMe: isMe,
+                                            userData: userData,
+                                            formatDate: _formatDate,
+                                            buildAvatar: _buildAvatar,
+                                            currentUserId: currentUserId,
+                                          );
+                                        },
+                                      ),
+                          ),
+                          SafeArea(
+                            child: Padding(
+                              padding: const EdgeInsets.all(8.0),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: TextField(
+                                      controller: _snippetController,
+                                      maxLines: 3,
+                                      decoration: InputDecoration(
+                                        hintText: "Enter code snippet...",
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  IconButton(
+                                    icon: const Icon(Icons.send),
+                                    onPressed: () => _shareSnippet(),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ),
-              ),
-            ],
-          ),
-
-          // Snippets Tab
-          Column(
-            children: [
-              Expanded(
-                child:
-                    _isLoadingSnippets
-                        ? const Center(child: CircularProgressIndicator())
-                        : ListView.builder(
-                          controller: _snippetScrollController,
-                          itemCount: _snippets.length,
-                          itemBuilder: (context, index) {
-                            final snip = _snippets[index];
-                            final isMe = snip['user_id'] == currentUserId;
-                            final userData = {
-                              'name': snip['user_name'],
-                              'avatar': snip['user_avatar'],
-                              'id': snip['user_id'],
-                            };
-
-                            return SnippetBubble(
-                              snippet: snip,
-                              isMe: isMe,
-                              userData: userData,
-                              onAvatarTap:
-                                  () => _showUserOptions(context, userData),
-                              formatDate: _formatDate,
-                              getAvatarImage: _getAvatarImage,
-                              getAvatarText: _getAvatarText,
-                              currentUserId: currentUserId,
-                              allUserData: _userData,
-                            );
-                          },
-                        ),
-              ),
-              SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _snippetController,
-                          maxLines: 3,
-                          decoration: InputDecoration(
-                            hintText: "Enter code snippet...",
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          onSubmitted: (_) => _shareSnippet(),
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.send),
-                        onPressed: _shareSnippet,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
+              ])
     );
   }
 
   String _formatDate(String dateString) {
     try {
-      final date = DateTime.parse(dateString);
+      final date = DateTime.parse(dateString).toLocal();
       return '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
     } catch (e) {
       return dateString;
@@ -718,88 +946,42 @@ class _CollabRoomScreenState extends State<CollabRoomScreen>
   }
 }
 
-// === single MessageBubble (kept) and SnippetBubble ===
-
+// Updated MessageBubble with simplified props
 class MessageBubble extends StatelessWidget {
   final Map<String, dynamic> message;
   final bool isMe;
   final Map<String, dynamic> userData;
-  final VoidCallback onAvatarTap;
   final String Function(String) formatDate;
-  final ImageProvider Function(String?) getAvatarImage;
-  final String Function(String?) getAvatarText;
+  final Widget Function(Map<String, dynamic>, {double radius}) buildAvatar;
   final String? currentUserId;
-  final Map<String, Map<String, dynamic>> allUserData;
 
   const MessageBubble({
     super.key,
     required this.message,
     required this.isMe,
     required this.userData,
-    required this.onAvatarTap,
     required this.formatDate,
-    required this.getAvatarImage,
-    required this.getAvatarText,
+    required this.buildAvatar,
     required this.currentUserId,
-    required this.allUserData,
   });
 
   @override
   Widget build(BuildContext context) {
-    // Safely extract strings
-    final String name = (userData['name'] ?? '') as String;
-    final String avatarRaw = (userData['avatar'] ?? '') as String;
-
-    // Use getAvatarImage/getAvatarText helpers passed into the widget
-    final ImageProvider avatarImage = getAvatarImage(
-      avatarRaw.isNotEmpty ? avatarRaw : null,
-    );
-    final String avatarText = getAvatarText(name);
-
-    // For current user avatar (right side), fetch safely from allUserData
-    final Map<String, dynamic>? meData =
-        (currentUserId != null) ? allUserData[currentUserId] : null;
-    final String myName = (meData?['name'] ?? '') as String;
-    final String myAvatarRaw = (meData?['avatar'] ?? '') as String;
-    final ImageProvider myAvatarImage = getAvatarImage(
-      myAvatarRaw.isNotEmpty ? myAvatarRaw : null,
-    );
-    final String myAvatarText = getAvatarText(myName);
-
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment:
-              isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+          mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
           children: [
-            // left avatar (other users)
-            if (!isMe)
-              GestureDetector(
-                onTap: onAvatarTap,
-                child: CircleAvatar(
-                  backgroundImage: avatarImage,
-                  radius: 20,
-                  child:
-                      avatarRaw.isEmpty
-                          ? Text(
-                            avatarText,
-                            style: const TextStyle(color: Colors.white),
-                          )
-                          : null,
-                ),
-              ),
-
+            if (!isMe) buildAvatar(userData, radius: 20),
             if (!isMe) const SizedBox(width: 8),
-
-            // message bubble
             Flexible(
               child: Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: isMe ? Colors.indigo[200] : Colors.grey[300],
+                  color: isMe ? Colors.indigo[100] : Colors.grey[200],
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Column(
@@ -807,7 +989,7 @@ class MessageBubble extends StatelessWidget {
                   children: [
                     if (!isMe)
                       Text(
-                        name.isNotEmpty ? name : 'Unknown User',
+                        userData['name'] ?? 'Unknown User',
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.bold,
@@ -828,25 +1010,8 @@ class MessageBubble extends StatelessWidget {
                 ),
               ),
             ),
-
             if (isMe) const SizedBox(width: 8),
-
-            // right avatar (current user)
-            if (isMe)
-              GestureDetector(
-                onTap: onAvatarTap,
-                child: CircleAvatar(
-                  backgroundImage: myAvatarImage,
-                  radius: 20,
-                  child:
-                      (myAvatarRaw.isEmpty)
-                          ? Text(
-                            myAvatarText,
-                            style: const TextStyle(color: Colors.white),
-                          )
-                          : null,
-                ),
-              ),
+            if (isMe) buildAvatar(userData, radius: 20),
           ],
         ),
       ),
@@ -854,78 +1019,42 @@ class MessageBubble extends StatelessWidget {
   }
 }
 
+// Updated SnippetBubble with simplified props
 class SnippetBubble extends StatelessWidget {
   final Map<String, dynamic> snippet;
   final bool isMe;
   final Map<String, dynamic> userData;
-  final VoidCallback onAvatarTap;
   final String Function(String) formatDate;
-  final ImageProvider Function(String?) getAvatarImage;
-  final String Function(String?) getAvatarText;
+  final Widget Function(Map<String, dynamic>, {double radius}) buildAvatar;
   final String? currentUserId;
-  final Map<String, Map<String, dynamic>> allUserData;
 
   const SnippetBubble({
     super.key,
     required this.snippet,
     required this.isMe,
     required this.userData,
-    required this.onAvatarTap,
     required this.formatDate,
-    required this.getAvatarImage,
-    required this.getAvatarText,
+    required this.buildAvatar,
     required this.currentUserId,
-    required this.allUserData,
   });
 
   @override
   Widget build(BuildContext context) {
-    final String name = (userData['name'] ?? '') as String;
-    final String avatarRaw = (userData['avatar'] ?? '') as String;
-    final ImageProvider avatarImage = getAvatarImage(
-      avatarRaw.isNotEmpty ? avatarRaw : null,
-    );
-    final String avatarText = getAvatarText(name);
-
-    final Map<String, dynamic>? meData =
-        (currentUserId != null) ? allUserData[currentUserId] : null;
-    final String myName = (meData?['name'] ?? '') as String;
-    final String myAvatarRaw = (meData?['avatar'] ?? '') as String;
-    final ImageProvider myAvatarImage = getAvatarImage(
-      myAvatarRaw.isNotEmpty ? myAvatarRaw : null,
-    );
-    final String myAvatarText = getAvatarText(myName);
-
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment:
-              isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+          mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
           children: [
-            if (!isMe)
-              GestureDetector(
-                onTap: onAvatarTap,
-                child: CircleAvatar(
-                  backgroundImage: avatarImage,
-                  radius: 20,
-                  child:
-                      avatarRaw.isEmpty
-                          ? Text(
-                            avatarText,
-                            style: const TextStyle(color: Colors.white),
-                          )
-                          : null,
-                ),
-              ),
+            if (!isMe) buildAvatar(userData, radius: 20),
             if (!isMe) const SizedBox(width: 8),
             Flexible(
               child: Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: isMe ? Colors.blue[200] : Colors.grey[300],
+                  color: isMe ? Colors.blue[100] : Colors.grey[200],
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Column(
@@ -933,7 +1062,7 @@ class SnippetBubble extends StatelessWidget {
                   children: [
                     if (!isMe)
                       Text(
-                        name.isNotEmpty ? name : 'Unknown User',
+                        userData['name'] ?? 'Unknown User',
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.bold,
@@ -955,21 +1084,7 @@ class SnippetBubble extends StatelessWidget {
               ),
             ),
             if (isMe) const SizedBox(width: 8),
-            if (isMe)
-              GestureDetector(
-                onTap: onAvatarTap,
-                child: CircleAvatar(
-                  backgroundImage: myAvatarImage,
-                  radius: 20,
-                  child:
-                      myAvatarRaw.isEmpty
-                          ? Text(
-                            myAvatarText,
-                            style: const TextStyle(color: Colors.white),
-                          )
-                          : null,
-                ),
-              ),
+            if (isMe) buildAvatar(userData, radius: 20),
           ],
         ),
       ),

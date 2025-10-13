@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:codexhub01/services/friendservice.dart';
 import 'package:codexhub01/mentorship/menteemessaging_screen.dart';
@@ -18,10 +19,26 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
 
   final TextEditingController _searchController = TextEditingController();
 
+  StreamSubscription? _friendSub; // real-time subscription
+
   @override
   void initState() {
     super.initState();
     loadData();
+
+    // Real-time listener for friend_requests table
+    _friendSub = service.supabase
+        .from('friend_requests') // change if using a different table
+        .stream(primaryKey: ['id'])
+        .listen((changes) {
+      loadData(); // refresh UI automatically
+    });
+  }
+
+  @override
+  void dispose() {
+    _friendSub?.cancel();
+    super.dispose();
   }
 
   Future<void> loadData() async {
@@ -83,11 +100,8 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
             Expanded(
               child: TabBarView(
                 children: [
-                  // Friend Requests
                   _buildRequests(),
-                  // Friends List
                   _buildFriends(),
-                  // People You May Know
                   _buildSuggestions(),
                 ],
               ),
@@ -103,51 +117,54 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
       return const Center(child: Text("No pending requests"));
     }
     return ListView(
-      children:
-          requests.map((req) {
-            final user = req['profiles'];
-            return Card(
-              margin: const EdgeInsets.all(6),
-              child: ListTile(
-                leading: const CircleAvatar(child: Icon(Icons.person)),
-                title: Text(user['username']),
-                subtitle: Text(user['email']),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.check, color: Colors.green),
-                      onPressed: () async {
-                        await service.acceptRequest(
-                          req['id'],
-                          req['sender_id'],
-                        );
-                        loadData();
-                        // Optionally navigate to chat after accepting
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder:
-                                (_) => ChatScreen(
-                                  otherUserId: req['sender_id'],
-                                  otherUserName: user['username'],
-                                ),
-                          ),
-                        );
-                      },
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Colors.red),
-                      onPressed: () async {
-                        await service.rejectRequest(req['id']);
-                        loadData();
-                      },
-                    ),
-                  ],
+      children: requests.map((req) {
+        final user = req['profiles'];
+        final avatarUrl = user['avatar_url'] ?? '';
+
+        return Card(
+          margin: const EdgeInsets.all(6),
+          child: ListTile(
+            leading: CircleAvatar(
+              backgroundImage:
+                  avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
+              child: avatarUrl.isEmpty ? const Icon(Icons.person) : null,
+            ),
+            title: Text(user['username']),
+            subtitle: Text(user['email']),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.check, color: Colors.green),
+                  onPressed: () async {
+                    await service.acceptRequest(
+                      req['id'],
+                      req['sender_id'],
+                    );
+                    loadData();
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ChatScreen(
+                          otherUserId: req['sender_id'],
+                          otherUserName: user['username'],
+                        ),
+                      ),
+                    );
+                  },
                 ),
-              ),
-            );
-          }).toList(),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Colors.red),
+                  onPressed: () async {
+                    await service.rejectRequest(req['id']);
+                    loadData();
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 
@@ -164,7 +181,7 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
       separatorBuilder: (_, __) => const SizedBox(height: 6),
       itemBuilder: (context, index) {
         final profile = friends[index]['profiles'] ?? {};
-
+        final avatarUrl = profile['avatar_url'] ?? '';
         final id = profile['id']?.toString();
         final username = profile['username']?.toString() ?? 'Unknown';
         final email = profile['email']?.toString() ?? '';
@@ -177,9 +194,10 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
           ),
           elevation: 2,
           child: ListTile(
-            leading: const CircleAvatar(
-              backgroundColor: Colors.indigo,
-              child: Icon(Icons.person, color: Colors.white),
+            leading: CircleAvatar(
+              backgroundImage:
+                  avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
+              child: avatarUrl.isEmpty ? const Icon(Icons.person) : null,
             ),
             title: Text(
               username,
@@ -188,13 +206,11 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
             subtitle: Text(email),
             trailing: const Icon(Icons.chat, color: Colors.indigo),
             onTap: () {
-              // ✅ Navigate directly to ChatScreen with the selected friend
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder:
-                      (_) =>
-                          ChatScreen(otherUserId: id, otherUserName: username),
+                  builder: (_) =>
+                      ChatScreen(otherUserId: id, otherUserName: username),
                 ),
               );
             },
@@ -215,6 +231,7 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
       itemCount: list.length,
       itemBuilder: (context, index) {
         final user = list[index]['profiles'] ?? list[index];
+        final avatarUrl = user['avatar_url'] ?? '';
         final id = user['id']?.toString();
         final username = user['username']?.toString() ?? 'Unknown';
         final email = user['email']?.toString() ?? '';
@@ -224,7 +241,11 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
         return Card(
           margin: const EdgeInsets.all(6),
           child: ListTile(
-            leading: const CircleAvatar(child: Icon(Icons.person)),
+            leading: CircleAvatar(
+              backgroundImage:
+                  avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
+              child: avatarUrl.isEmpty ? const Icon(Icons.person) : null,
+            ),
             title: Text(username),
             subtitle: Text(email),
             trailing: IconButton(
@@ -238,7 +259,6 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
               },
             ),
             onTap: () {
-              // 🔹 Return selected suggestion to MentorDashboardScreen
               Navigator.pop(context, {'id': id, 'username': username});
             },
           ),

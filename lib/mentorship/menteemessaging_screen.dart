@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:codexhub01/services/messageservice.dart';
+import 'package:codexhub01/services/call_service.dart';
 
 class ChatScreen extends StatefulWidget {
   final String otherUserId;
@@ -17,33 +19,86 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final MessageService service = MessageService();
+  final CallService callService = CallService();
   final TextEditingController messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
   List<Map<String, dynamic>> messages = [];
+  StreamSubscription? _messageSub;
 
-  @override
-  void initState() {
-    super.initState();
-    _loadMessages();
-    _listenRealtime();
-  }
+ @override
+void initState() {
+  super.initState();
 
-  void _listenRealtime() {
-    service.messageStream(widget.otherUserId).listen((newMessages) {
-      if (!mounted) return;
-      setState(() => messages = newMessages);
-      _scrollToBottom();
-    });
-  }
-
-  Future<void> _loadMessages() async {
-    final loaded = await service.getMessages(widget.otherUserId);
+  // 1️⃣ Listen to real-time messages sa conversation
+  _messageSub = service.messageStream(widget.otherUserId).listen((newMsgs) {
     if (!mounted) return;
-    setState(() => messages = loaded);
-    _scrollToBottom();
+
+    bool updated = false;
+
+    for (var msg in newMsgs) {
+      // Iwasan ang duplicates
+      if (!messages.any((m) => m['id'] == msg['id'])) {
+        messages.add(msg);
+        updated = true;
+      }
+    }
+
+    if (updated) {
+      setState(() {});       // UI updates agad
+      _scrollToBottom();     // auto scroll sa latest
+    }
+  });
+}
+
+/// Send a message with instant local echo
+Future<void> _sendMessage() async {
+  final text = messageController.text.trim();
+  if (text.isEmpty) return;
+
+  final currentUserId = service.currentUserId;
+
+  // 1️⃣ Local echo: temporary message para makita agad sa UI
+  final localMsg = {
+    'id': DateTime.now().millisecondsSinceEpoch, // temporary ID
+    'sender_id': currentUserId,
+    'receiver_id': widget.otherUserId,
+    'message': text,
+    'created_at': DateTime.now().toUtc().toIso8601String(),
+  };
+
+  setState(() {
+    messages.add(localMsg);
+  });
+  _scrollToBottom();
+
+  messageController.clear();
+
+  // 2️⃣ Send sa Supabase
+  try {
+    await service.sendMessage(widget.otherUserId, text);
+    // Real-time stream ng Supabase ang magpapatunay at magre-replace ng temp message kung kailangan
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Failed to send message: $e')),
+    );
+  }
+}
+  /// Start an audio or video call
+  Future<void> _startCall(String type) async {
+    try {
+      await callService.startCall(widget.otherUserId, type);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Calling ${widget.otherUserName} ($type)...')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to start $type call: $e')),
+      );
+    }
   }
 
+  /// Scroll to bottom of chat
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
@@ -56,22 +111,15 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  Future<void> _sendMessage() async {
-    final text = messageController.text.trim();
-    if (text.isEmpty) return;
-
-    try {
-      await service.sendMessage(widget.otherUserId, text);
-      messageController.clear();
-      _scrollToBottom();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to send message: $e')));
-    }
+  @override
+  void dispose() {
+    _messageSub?.cancel();
+    messageController.dispose();
+    _scrollController.dispose();
+    super.dispose();
   }
 
+  /// Format timestamp
   String _formatTime(String? timestamp) {
     if (timestamp == null) return '';
     final dateTime = DateTime.tryParse(timestamp)?.toLocal();
@@ -102,6 +150,18 @@ class _ChatScreenState extends State<ChatScreen> {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.pop(context),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.call),
+            tooltip: "Audio Call",
+            onPressed: () => _startCall('audio'),
+          ),
+          IconButton(
+            icon: const Icon(Icons.videocam),
+            tooltip: "Video Call",
+            onPressed: () => _startCall('video'),
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -117,8 +177,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 final createdAt = msg['created_at'] ?? '';
 
                 return Align(
-                  alignment:
-                      isMe ? Alignment.centerRight : Alignment.centerLeft,
+                  alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                   child: Container(
                     margin: const EdgeInsets.symmetric(vertical: 4),
                     padding: const EdgeInsets.all(12),

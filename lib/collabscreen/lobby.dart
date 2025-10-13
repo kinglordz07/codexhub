@@ -20,28 +20,72 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
     _fetchRooms();
   }
 
-  Future<void> _fetchRooms() async {
-    setState(() => isLoading = true);
-    try {
-      final response = await supabase
-          .from('rooms')
-          .select('id, name, owner_id, created_at');
+  // In your room creation method
+Future<void> _createRoom(String name) async {
+  final user = supabase.auth.currentUser;
+  if (user == null) return;
 
-      if (!mounted) return;
+  try {
+    final room = await supabase
+        .from('rooms')
+        .insert({
+          'name': name, 
+          'creator_id': user.id  // Changed from owner_id to creator_id
+        })
+        .select()
+        .single();
+
+    // Auto-join creator
+    await supabase.from('room_members').insert({
+      'room_id': room['id'],
+      'user_id': user.id,
+    });
+
+    if (!mounted) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => CollabRoomScreen(
+          roomId: room['id'], 
+          roomName: room['name']
+        ),
+      ),
+    );
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Error creating room: ${e.toString()}')),
+    );
+  }
+}
+
+// In your room fetching method
+Future<void> _fetchRooms() async {
+  setState(() => isLoading = true);
+  try {
+    final response = await supabase
+        .from('rooms')
+        .select('id, name, creator_id, created_at, is_public') // Use creator_id
+        .order('created_at', ascending: false);
+
+    if (mounted) {
       setState(() {
         rooms = List<Map<String, dynamic>>.from(response);
       });
-    } catch (e) {
-      if (!mounted) return;
+    }
+  } catch (e) {
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error fetching rooms: ${e.toString()}')),
       );
-    } finally {
-      if (mounted) {
-        setState(() => isLoading = false);
-      }
+    }
+  } finally {
+    if (mounted) {
+      setState(() => isLoading = false);
     }
   }
+}
 
   Future<void> _showJoinRoomDialog() async {
     final user = supabase.auth.currentUser;
@@ -178,42 +222,9 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
     await _createRoom(name);
   }
 
-  Future<void> _createRoom(String name) async {
-    final user = supabase.auth.currentUser;
-    if (user == null) return;
 
-    try {
-      final room =
-          await supabase
-              .from('rooms')
-              .insert({'name': name, 'owner_id': user.id})
-              .select()
-              .single();
 
-      // Auto-join owner
-      await supabase.from('room_members').insert({
-        'room_id': room['id'],
-        'user_id': user.id,
-      });
 
-      if (!mounted) return;
-
-      // Navigate to the new room
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder:
-              (context) =>
-                  CollabRoomScreen(roomId: room['id'], roomName: room['name']),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error creating room: ${e.toString()}')),
-      );
-    }
-  }
 
   @override
   Widget build(BuildContext context) {

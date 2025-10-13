@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:codexhub01/services/call_service.dart';
 import 'package:flutter/material.dart';
 import 'package:codexhub01/parts/code_editor.dart';
 import 'package:codexhub01/parts/learning_tools.dart';
@@ -12,7 +14,7 @@ import 'package:codexhub01/utils/forgotpass.dart';
 import 'package:codexhub01/mentorship/friendlst.dart';
 import 'package:codexhub01/parts/create_live_lobby.dart';
 import 'package:codexhub01/mentorship/schedulesession_screen.dart';
-import 'package:codexhub01/parts/intro_screen.dart'; // ✅ make sure this path matches your file
+import 'package:codexhub01/parts/intro_screen.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 late final SupabaseClient supabase;
@@ -76,18 +78,13 @@ class CodeHubApp extends StatelessWidget {
             ),
           ),
           themeMode: themeMode,
-
-          // ✅ Start with IntroScreen first
           initialRoute: '/intro',
-
           routes: {
             '/intro': (context) => const IntroScreen(),
             '/': (context) => const SignIn(),
             '/dashboard': (context) => DashboardScreen(),
             '/forgot-password': (context) => const ForgotPasswordScreen(),
           },
-
-          // for password reset callback
           onGenerateRoute: (settings) {
             if (settings.name == '/reset-callback') {
               final Uri? uri = settings.arguments as Uri?;
@@ -107,8 +104,33 @@ class CodeHubApp extends StatelessWidget {
   }
 }
 
-class DashboardScreen extends StatelessWidget {
-  DashboardScreen({super.key});
+class DashboardScreen extends StatefulWidget {
+  const DashboardScreen({super.key});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  StreamSubscription? _callSub;
+
+  @override
+  void initState() {
+    super.initState();
+
+    final currentUserId = supabase.auth.currentUser?.id;
+
+    if (currentUserId != null) {
+      final callService = CallService.instance;
+      callService.listenToCallsGlobal(context);
+    }
+  }
+
+  @override
+  void dispose() {
+    _callSub?.cancel();
+    super.dispose();
+  }
 
   final List<Map<String, dynamic>> menuItems = [
     {
@@ -174,12 +196,11 @@ class DashboardScreen extends StatelessWidget {
             mainAxisSpacing: 16,
             childAspectRatio: 1,
           ),
-          itemBuilder:
-              (context, index) => DashboardTile(
-                title: menuItems[index]['title'] as String,
-                iconData: menuItems[index]['icon'] as IconData,
-                screen: menuItems[index]['route'] as Widget,
-              ),
+          itemBuilder: (context, index) => DashboardTile(
+            title: menuItems[index]['title'] as String,
+            iconData: menuItems[index]['icon'] as IconData,
+            screen: menuItems[index]['route'] as Widget,
+          ),
         ),
       ),
     );

@@ -1,9 +1,6 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:http/http.dart' as http;
-import 'package:flutter/foundation.dart';
 
 class CollabCodeEditorScreen extends StatefulWidget {
   final String roomId;
@@ -16,7 +13,8 @@ class CollabCodeEditorScreen extends StatefulWidget {
   });
 
   @override
-  State<CollabCodeEditorScreen> createState() => _CollabCodeEditorScreenState();
+  State<CollabCodeEditorScreen> createState() =>
+      _CollabCodeEditorScreenState();
 }
 
 class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen> {
@@ -29,7 +27,6 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen> {
 
   String selectedLanguage = 'python';
   String output = '';
-  String mentorFeedback = '';
 
   bool _menteeTyping = false;
   bool _mentorTyping = false;
@@ -98,20 +95,17 @@ class Program {
 
   Future<void> _loadSession() async {
     try {
-      final session =
-          await supabase
-              .from('live_sessions')
-              .select()
-              .eq('id', widget.roomId)
-              .maybeSingle();
+      final session = await supabase
+          .from('live_sessions')
+          .select()
+          .eq('id', widget.roomId)
+          .maybeSingle();
 
       if (session != null) {
         selectedLanguage = session['language'] ?? 'python';
         final rawCode = (session['code'] ?? '').toString();
         _codeController.text =
-            rawCode.isEmpty
-                ? (defaultSnippets[selectedLanguage] ?? '')
-                : rawCode;
+            rawCode.isEmpty ? (defaultSnippets[selectedLanguage] ?? '') : rawCode;
 
         output = session['output'] ?? '';
         _feedbackController.text = session['mentor_feedback'] ?? '';
@@ -128,89 +122,93 @@ class Program {
   }
 
   void _subscribeRealtime() {
-    _channel =
-        supabase.channel('public:live_sessions')
-          ..onPostgresChanges(
-            event: PostgresChangeEvent.update,
-            schema: 'public',
-            table: 'live_sessions',
-            callback: (payload) {
-              final newData = payload.newRecord;
-              if (mounted) {
-                setState(() {
-                  if (!widget.isMentor && !_menteeTyping) {
-                    final latestFeedback = newData['mentor_feedback'] ?? '';
-                    if (latestFeedback != _feedbackController.text) {
-                      _feedbackController.text = latestFeedback;
-                    }
-                  }
+    _channel = supabase.channel('public:live_sessions')
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.update,
+        schema: 'public',
+        table: 'live_sessions',
+        callback: (payload) {
+          final newData = payload.newRecord;
+          if (!mounted) return;
 
-                  if (widget.isMentor && !_mentorTyping) {
-                    final latestCode = newData['code'] ?? '';
-                    if (latestCode != _codeController.text) {
-                      _codeController.text = latestCode;
-                    }
-                  }
+          setState(() {
+            // Update code for mentor
+            if (widget.isMentor && !_mentorTyping) {
+              _codeController.text = newData['code'] ?? _codeController.text;
+            }
 
-                  output = newData['output'] ?? output;
-                  _highlightedLines = List<int>.from(
-                    newData['highlighted_lines'] ?? [],
-                  );
-                  _lineComments = Map<int, String>.from(
-                    newData['line_comments'] ?? {},
-                  );
-                });
-              }
-            },
-          )
-          ..subscribe();
+            // Update output for both mentor and mentee
+            output = newData['output'] ?? output;
+
+            // Update mentor feedback for mentee
+            if (!widget.isMentor && !_menteeTyping) {
+              _feedbackController.text = newData['mentor_feedback'] ?? '';
+            }
+
+            // Highlighted lines and comments
+            _highlightedLines = List<int>.from(newData['highlighted_lines'] ?? []);
+            _lineComments = Map<int, String>.from(newData['line_comments'] ?? {});
+          });
+        },
+      )
+      ..subscribe();
 
     debugPrint('✅ Realtime listening for room ${widget.roomId}');
   }
 
   Future<void> _updateLiveField(String field, dynamic value) async {
     try {
+      dynamic supabaseValue = value;
+      if (field == 'line_comments' && value is Map<int, String>) {
+        supabaseValue = value.map<String, String>((k, v) => MapEntry(k.toString(), v));
+      }
+
       await supabase
           .from('live_sessions')
-          .update({field: value})
+          .update({field: supabaseValue})
           .eq('id', widget.roomId);
     } catch (e) {
-      debugPrint('⚠️ Error updating live field: $e');
+      debugPrint('⚠️ Error updating $field: $e');
     }
   }
 
   Future<void> _saveCode() async {
-    if (isSaving) return;
-    setState(() => isSaving = true);
+  if (isSaving) return;
+  setState(() => isSaving = true);
 
-    try {
-      await supabase
-          .from('live_sessions')
-          .update({
-            'code': _codeController.text,
-            'language': selectedLanguage,
-            'output': output,
-            'mentor_feedback': _feedbackController.text,
-            'highlighted_lines': _highlightedLines,
-            'line_comments': _lineComments,
-          })
-          .eq('id', widget.roomId);
+  try {
+    // Prepare data
+    final Map<String, dynamic> dataToSave = {
+      'code': _codeController.text,
+      'language': selectedLanguage,
+      'output': output,
+      'mentor_feedback': _feedbackController.text,
+      'highlighted_lines': _highlightedLines,
+      'line_comments': _lineComments.map((k, v) => MapEntry(k.toString(), v)),
+    };
 
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Code saved!')));
-    } catch (e) {
-      debugPrint('❌ Error saving code: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Failed to save code')));
-      }
-    } finally {
-      setState(() => isSaving = false);
+    // Save to Supabase
+    await supabase
+        .from('live_sessions')
+        .update(dataToSave)
+        .eq('id', widget.roomId);
+
+    // Feedback
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('Code saved!')));
+  } catch (e, st) {
+    debugPrint('❌ Error saving code: $e');
+    debugPrint('$st');
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Failed to save code')));
     }
+  } finally {
+    setState(() => isSaving = false);
   }
+}
+
 
   Future<void> _runCode() async {
     if (widget.isMentor) return;
@@ -218,39 +216,73 @@ class Program {
     final codeToRun = _codeController.text;
     if (codeToRun.isEmpty) {
       setState(() => output = '⚠️ No valid code to run.');
+      await _updateLiveField('output', output);
       return;
     }
 
-    String backendUrl;
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      backendUrl = 'http://10.0.2.2:2000/run';
-    } else if (defaultTargetPlatform == TargetPlatform.iOS) {
-      backendUrl = 'http://127.0.0.1:2000/run';
-    } else {
-      backendUrl = 'http://192.168.1.9:2000/run';
-    }
+    setState(() => output = 'Running code...');
+    await Future.delayed(const Duration(milliseconds: 500));
 
-    try {
-      final response = await http.post(
-        Uri.parse(backendUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'code': codeToRun, 'language': selectedLanguage}),
-      );
+    final result = _getFakeExecutionResult(codeToRun, selectedLanguage);
+    setState(() => output = result);
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        setState(() {
-          output = data['output'] ?? '';
-          mentorFeedback = data['feedback'] ?? '';
-        });
-        await _saveCode();
-      } else {
-        setState(() => output = 'Error: ${response.statusCode}');
+    // Save output for mentor in real-time
+    await _updateLiveField('output', result);
+  }
+
+  String _getFakeExecutionResult(String code, String language) {
+  List<String> results = [];
+
+  if (language == 'python') {
+    final regex = RegExp(r'print\s*\((.*?)\)', dotAll: true);
+    final matches = regex.allMatches(code);
+    for (var m in matches) {
+      var content = m.group(1) ?? '';
+      if ((content.startsWith('"') && content.endsWith('"')) ||
+          (content.startsWith("'") && content.endsWith("'"))) {
+        content = content.substring(1, content.length - 1);
       }
-    } catch (e) {
-      setState(() => output = 'Error connecting to backend: $e');
+      results.add(content);
+    }
+  } else if (language == 'java') {
+    final regex = RegExp(r'System\.out\.println\s*\((.*?)\)\s*;', dotAll: true);
+    final matches = regex.allMatches(code);
+    for (var m in matches) {
+      var content = m.group(1) ?? '';
+      if ((content.startsWith('"') && content.endsWith('"')) ||
+          (content.startsWith("'") && content.endsWith("'"))) {
+        content = content.substring(1, content.length - 1);
+      }
+      results.add(content);
+    }
+  } else if (language == 'csharp') {
+    final regex = RegExp(r'Console\.WriteLine\s*\((.*?)\)\s*;', dotAll: true);
+    final matches = regex.allMatches(code);
+    for (var m in matches) {
+      var content = m.group(1) ?? '';
+      if ((content.startsWith('"') && content.endsWith('"')) ||
+          (content.startsWith("'") && content.endsWith("'"))) {
+        content = content.substring(1, content.length - 1);
+      }
+      results.add(content);
+    }
+  } else if (language == 'vbnet') {
+    final regex = RegExp(r'Console\.WriteLine\s*\((.*?)\)', dotAll: true);
+    final matches = regex.allMatches(code);
+    for (var m in matches) {
+      var content = m.group(1) ?? '';
+      if ((content.startsWith('"') && content.endsWith('"')) ||
+          (content.startsWith("'") && content.endsWith("'"))) {
+        content = content.substring(1, content.length - 1);
+      }
+      results.add(content);
     }
   }
+
+  return results.isEmpty
+      ? '⚠️ Nothing to execute or unsupported code.'
+      : results.join('\n');
+}
 
   @override
   void dispose() {
@@ -269,72 +301,70 @@ class Program {
         actions: [
           if (!widget.isMentor)
             IconButton(
-              icon:
-                  isSaving
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : const Icon(Icons.save),
+              icon: isSaving
+                  ? const CircularProgressIndicator(color: Colors.white)
+                  : const Icon(Icons.save),
               onPressed: _saveCode,
             ),
           if (!widget.isMentor)
             IconButton(icon: const Icon(Icons.play_arrow), onPressed: _runCode),
         ],
       ),
-      body:
-          isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  children: [
-                    // Language dropdown
-                    DropdownButtonFormField<String>(
-                      initialValue: selectedLanguage,
-                      items: const [
-                        DropdownMenuItem(
-                          value: 'python',
-                          child: Text('Python'),
+      body: isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                children: [
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedLanguage,
+                    items: const [
+                      DropdownMenuItem(value: 'python', child: Text('Python')),
+                      DropdownMenuItem(value: 'vbnet', child: Text('VB.NET')),
+                      DropdownMenuItem(value: 'java', child: Text('Java')),
+                      DropdownMenuItem(value: 'csharp', child: Text('C#')),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) {
+                        setState(() {
+                          selectedLanguage = v;
+                          _codeController.text = defaultSnippets[v] ?? '';
+                          _highlightedLines.clear();
+                          _lineComments.clear();
+                        });
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      child: TextField(
+                        controller: _codeController,
+                        maxLines: null,
+                        decoration: const InputDecoration(
+                          border: OutlineInputBorder(),
                         ),
-                        DropdownMenuItem(value: 'vbnet', child: Text('VB.NET')),
-                        DropdownMenuItem(value: 'java', child: Text('Java')),
-                        DropdownMenuItem(value: 'csharp', child: Text('C#')),
-                      ],
-                      onChanged: (v) {
-                        if (v != null) {
-                          setState(() {
-                            selectedLanguage = v;
-                            _codeController.text = defaultSnippets[v] ?? '';
-                            _highlightedLines.clear();
-                            _lineComments.clear();
-                          });
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 10),
-                    // Code editor
-                    Expanded(
-                      child: SingleChildScrollView(
-                        child: TextField(
-                          controller: _codeController,
-                          maxLines: null,
-                          decoration: const InputDecoration(
-                            border: OutlineInputBorder(),
-                          ),
-                          style: const TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 14,
-                          ),
-                        ),
+                        style:
+                            const TextStyle(fontFamily: 'monospace', fontSize: 14),
                       ),
                     ),
-                    const SizedBox(height: 10),
-                    Text(
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey),
+                        borderRadius: BorderRadius.circular(5)),
+                    child: Text(
                       'Output:\n$output',
-                      style: const TextStyle(fontSize: 14),
+                      style:
+                          const TextStyle(fontSize: 14, color: Colors.black87),
                     ),
-                    const SizedBox(height: 10),
-                    // Mentor feedback
-                    widget.isMentor
-                        ? TextField(
+                  ),
+                  const SizedBox(height: 10),
+                  widget.isMentor
+                      ? TextField(
                           controller: _feedbackController,
                           maxLines: 4,
                           decoration: const InputDecoration(
@@ -342,16 +372,21 @@ class Program {
                             hintText: 'Type mentor feedback here...',
                           ),
                         )
-                        : Text(
-                          'Mentor Feedback:\n${_feedbackController.text}',
-                          style: const TextStyle(
-                            fontSize: 14,
-                            color: Colors.green,
+                      : Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                              border: Border.all(color: Colors.green),
+                              borderRadius: BorderRadius.circular(5)),
+                          child: Text(
+                            'Mentor Feedback:\n${_feedbackController.text}',
+                            style: const TextStyle(
+                                fontSize: 14, color: Colors.green),
                           ),
                         ),
-                  ],
-                ),
+                ],
               ),
+            ),
     );
   }
 }
