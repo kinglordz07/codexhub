@@ -80,13 +80,17 @@ class MentorFriendService {
     if (userId == null) return [];
 
     final res = await supabase
-        .from('mentor_friends')
-        .select(
-          'id, mentor_id, friend_id, profiles!mentor_friends_friend_id_fkey(id, username, email, avatar_url)',
-        )
-        .or('mentor_id.eq.$userId,friend_id.eq.$userId')
-        .eq('status', 'accepted');
-
+    .from('mentor_friends')
+    .select('''
+      id,
+      mentor_id,
+      friend_id,
+      status,
+      mentor:mentor_id (id, username, email, avatar_url),
+      friend:friend_id (id, username, email, avatar_url)
+    ''')
+    .or('mentor_id.eq.$userId,friend_id.eq.$userId')
+    .eq('status', 'accepted');
     return List<Map<String, dynamic>>.from(res);
   }
 

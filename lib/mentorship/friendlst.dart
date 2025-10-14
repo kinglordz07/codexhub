@@ -18,8 +18,7 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
   List<Map<String, dynamic>> searchResults = [];
 
   final TextEditingController _searchController = TextEditingController();
-
-  StreamSubscription? _friendSub; // real-time subscription
+  StreamSubscription? _friendSub;
 
   @override
   void initState() {
@@ -28,9 +27,9 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
 
     // Real-time listener for friend_requests table
     _friendSub = service.supabase
-        .from('friend_requests') // change if using a different table
+        .from('mentor_friend_requests')
         .stream(primaryKey: ['id'])
-        .listen((changes) {
+        .listen((_) {
       loadData(); // refresh UI automatically
     });
   }
@@ -45,6 +44,7 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
     final reqs = await service.getPendingRequests();
     final frs = await service.getFriends();
     final suggs = await service.getSuggestions();
+    if (!mounted) return;
     setState(() {
       requests = reqs;
       friends = frs;
@@ -59,6 +59,7 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
       return;
     }
     final res = await service.searchUsers(query);
+    if (!mounted) return;
     setState(() {
       searchResults = res;
     });
@@ -70,7 +71,7 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
       length: 3,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text("My Friends"),
+          title: const Text("Friends"),
           bottom: const TabBar(
             tabs: [
               Tab(text: "Requests"),
@@ -112,6 +113,7 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
     );
   }
 
+  /// 📨 Friend Requests Tab
   Widget _buildRequests() {
     if (requests.isEmpty) {
       return const Center(child: Text("No pending requests"));
@@ -119,7 +121,14 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
     return ListView(
       children: requests.map((req) {
         final user = req['profiles'];
+        if (user == null) return const SizedBox.shrink();
+
+        final requestId = req['id']?.toString();
+        final senderId = req['sender_id']?.toString();
+        final username = user['username']?.toString() ?? 'Unknown';
         final avatarUrl = user['avatar_url'] ?? '';
+
+        if (requestId == null || senderId == null) return const SizedBox.shrink();
 
         return Card(
           margin: const EdgeInsets.all(6),
@@ -129,35 +138,50 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
                   avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
               child: avatarUrl.isEmpty ? const Icon(Icons.person) : null,
             ),
-            title: Text(user['username']),
-            subtitle: Text(user['email']),
+            title: Text(username),
+            subtitle: Text(user['email'] ?? ''),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 IconButton(
                   icon: const Icon(Icons.check, color: Colors.green),
                   onPressed: () async {
-                    await service.acceptRequest(
-                      req['id'],
-                      req['sender_id'],
+                    await service.acceptRequest(requestId, senderId);
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text("You are now friends with $username")),
                     );
-                    loadData();
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ChatScreen(
-                          otherUserId: req['sender_id'],
-                          otherUserName: user['username'],
-                        ),
-                      ),
-                    );
+                    await loadData();
                   },
                 ),
                 IconButton(
                   icon: const Icon(Icons.close, color: Colors.red),
                   onPressed: () async {
-                    await service.rejectRequest(req['id']);
-                    loadData();
+                    await service.rejectRequest(requestId);
+                    if (!mounted) return;
+                    await loadData();
+                  },
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chat, color: Colors.indigo),
+                  onPressed: () async {
+                    final friend = await service.startChatWithFriend(senderId);
+                    if (friend == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text("You can only chat with friends")),
+                      );
+                      return;
+                    }
+                    if (!mounted) return;
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ChatScreen(
+                          otherUserId: friend['id']!,
+                          otherUserName: friend['username']!,
+                        ),
+                      ),
+                    );
                   },
                 ),
               ],
@@ -168,58 +192,80 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
     );
   }
 
+  /// 👥 Friends Tab
   Widget _buildFriends() {
-    if (friends.isEmpty) {
-      return const Center(
-        child: Text("No friends yet", style: TextStyle(fontSize: 16)),
-      );
-    }
+  if (friends.isEmpty) {
+    return const Center(
+      child: Text("No friends yet", style: TextStyle(fontSize: 16)),
+    );
+  }
 
-    return ListView.separated(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-      itemCount: friends.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 6),
-      itemBuilder: (context, index) {
-        final profile = friends[index]['profiles'] ?? {};
-        final avatarUrl = profile['avatar_url'] ?? '';
-        final id = profile['id']?.toString();
-        final username = profile['username']?.toString() ?? 'Unknown';
-        final email = profile['email']?.toString() ?? '';
+  final currentUserId = service.supabase.auth.currentUser?.id ?? '';
 
-        if (id == null || id.isEmpty) return const SizedBox.shrink();
+  return ListView.separated(
+    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+    itemCount: friends.length,
+    separatorBuilder: (_, __) => const SizedBox(height: 6),
+    itemBuilder: (context, index) {
+      final friendData = friends[index];
 
-        return Card(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+      // Determine the other user (not the current user)
+      final profile = friendData['mentor_id'] == currentUserId
+          ? friendData['friend']    // friend_id profile
+          : friendData['mentor'];   // mentor_id profile
+
+      if (profile == null) return const SizedBox.shrink();
+
+      final id = profile['id']?.toString();
+      final username = profile['username']?.toString() ?? 'Unknown';
+      final email = profile['email']?.toString() ?? '';
+      final avatarUrl = profile['avatar_url'] ?? '';
+
+      if (id == null) return const SizedBox.shrink();
+
+      return Card(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        elevation: 2,
+        child: ListTile(
+          leading: CircleAvatar(
+            backgroundImage: avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
+            child: avatarUrl.isEmpty ? const Icon(Icons.person) : null,
           ),
-          elevation: 2,
-          child: ListTile(
-            leading: CircleAvatar(
-              backgroundImage:
-                  avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
-              child: avatarUrl.isEmpty ? const Icon(Icons.person) : null,
-            ),
-            title: Text(
-              username,
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            subtitle: Text(email),
-            trailing: const Icon(Icons.chat, color: Colors.indigo),
-            onTap: () {
+          title: Text(
+            username,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          subtitle: Text(email),
+          trailing: IconButton(
+            icon: const Icon(Icons.chat, color: Colors.indigo),
+            onPressed: () async {
+              final friend = await service.startChatWithFriend(id);
+              if (friend == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("You can only chat with friends")),
+                );
+                return;
+              }
+              if (!mounted) return;
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) =>
-                      ChatScreen(otherUserId: id, otherUserName: username),
+                  builder: (_) => ChatScreen(
+                    otherUserId: friend['id']!,
+                    otherUserName: friend['username']!,
+                  ),
                 ),
               );
             },
           ),
-        );
-      },
-    );
-  }
-
+        ),
+      );
+    },
+  );
+}
+  /// 💡 Suggestions Tab
   Widget _buildSuggestions() {
     final list = searchResults.isNotEmpty ? searchResults : suggestions;
 
@@ -236,7 +282,7 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
         final username = user['username']?.toString() ?? 'Unknown';
         final email = user['email']?.toString() ?? '';
 
-        if (id == null || id.isEmpty) return const SizedBox.shrink();
+        if (id == null) return const SizedBox.shrink();
 
         return Card(
           margin: const EdgeInsets.all(6),
@@ -252,10 +298,11 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
               icon: const Icon(Icons.person_add, color: Colors.blue),
               onPressed: () async {
                 await service.sendRequest(id);
+                if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(content: Text("Friend request sent to $username")),
                 );
-                loadData();
+                await loadData();
               },
             ),
             onTap: () {

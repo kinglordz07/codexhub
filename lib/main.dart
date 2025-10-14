@@ -1,20 +1,22 @@
 import 'dart:async';
-import 'package:codexhub01/services/call_service.dart';
 import 'package:flutter/material.dart';
-import 'package:codexhub01/parts/code_editor.dart';
-import 'package:codexhub01/parts/learning_tools.dart';
-import 'package:codexhub01/parts/mentorship.dart';
-import 'package:codexhub01/parts/profilescreen.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:codexhub01/collabscreen/lobby.dart';
-import 'package:codexhub01/parts/log_in.dart';
-import 'package:codexhub01/utils/resetpasscallback.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:codexhub01/utils/forgotpass.dart';
-import 'package:codexhub01/mentorship/friendlst.dart';
-import 'package:codexhub01/parts/create_live_lobby.dart';
-import 'package:codexhub01/mentorship/schedulesession_screen.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+// 🔹 Parts / Screens
+import 'package:codexhub01/parts/log_in.dart';
 import 'package:codexhub01/parts/intro_screen.dart';
+import 'package:codexhub01/parts/learning_tools.dart';
+import 'package:codexhub01/parts/code_editor.dart';
+import 'package:codexhub01/parts/profilescreen.dart';
+import 'package:codexhub01/parts/create_live_lobby.dart';
+import 'package:codexhub01/utils/forgotpass.dart';
+import 'package:codexhub01/utils/resetpasscallback.dart';
+
+// 🔹 Collaboration & Mentorship Features
+import 'package:codexhub01/collabscreen/lobby.dart';
+import 'package:codexhub01/mentorship/friendlst.dart';
+import 'package:codexhub01/mentorship/schedulesession_screen.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 late final SupabaseClient supabase;
@@ -23,14 +25,17 @@ final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.light);
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // 🔹 Handle Flutter errors gracefully
   FlutterError.onError = (FlutterErrorDetails details) {
     debugPrint('Caught error: ${details.exception}');
   };
 
+  // 🔹 Load saved theme mode
   final prefs = await SharedPreferences.getInstance();
   final isDark = prefs.getBool('isDarkMode') ?? false;
   themeNotifier.value = isDark ? ThemeMode.dark : ThemeMode.light;
 
+  // 🔹 Initialize Supabase
   try {
     const url = 'https://ohvelhlrehojqrvaqsim.supabase.co';
     const anonKey =
@@ -38,9 +43,9 @@ Future<void> main() async {
 
     await Supabase.initialize(url: url, anonKey: anonKey);
     supabase = Supabase.instance.client;
-    debugPrint('Supabase initialized successfully');
+    debugPrint('✅ Supabase initialized successfully');
   } catch (e, stackTrace) {
-    debugPrint('Failed to initialize Supabase: $e');
+    debugPrint('❌ Failed to initialize Supabase: $e');
     debugPrint('Stack trace: $stackTrace');
   }
 
@@ -82,7 +87,7 @@ class CodeHubApp extends StatelessWidget {
           routes: {
             '/intro': (context) => const IntroScreen(),
             '/': (context) => const SignIn(),
-            '/dashboard': (context) => DashboardScreen(),
+            '/dashboard': (context) => const DashboardScreen(),
             '/forgot-password': (context) => const ForgotPasswordScreen(),
           },
           onGenerateRoute: (settings) {
@@ -117,13 +122,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    _listenToIncomingCalls();
+  }
 
-    final currentUserId = supabase.auth.currentUser?.id;
-
-    if (currentUserId != null) {
-      final callService = CallService.instance;
-      callService.listenToCallsGlobal(context);
-    }
+  void _listenToIncomingCalls() {
+    // 🔹 Placeholder for real-time notification or call listener
+    _callSub = supabase
+        .from('calls')
+        .stream(primaryKey: ['id'])
+        .listen((calls) {
+      debugPrint("📞 Incoming call data: $calls");
+      // You can add navigation or notifications here later
+    });
   }
 
   @override
@@ -148,13 +158,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
     },
     {
-      'title': 'Mentorship',
-      'icon': Icons.support_agent,
-      'route': MentorshipScreen(),
-    },
-    {
       'title': 'Friend List',
-      'icon': Icons.smart_toy_outlined,
+      'icon': Icons.people,
       'route': MentorFriendPage(),
     },
     {
@@ -173,7 +178,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       'route': LearningTools(),
     },
     {
-      'title': 'Schedule Sessions',
+      'title': 'Sessions Scheduling',
       'icon': Icons.calendar_today,
       'route': ScheduleSessionScreen(),
     },
@@ -222,6 +227,8 @@ class DashboardTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
+      elevation: 3,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: InkWell(
         onTap: () {
           Navigator.push(

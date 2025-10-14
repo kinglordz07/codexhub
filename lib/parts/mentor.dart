@@ -1,15 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:codexhub01/mentorship/resourcelibrary_screen.dart';
-import 'package:codexhub01/mentorship/performanceanalytics_screen.dart';
-import 'package:codexhub01/mentorship/progresstrackerscreen.dart';
 import 'package:codexhub01/parts/profilescreen.dart';
 import 'package:codexhub01/mentorship/friendlst.dart';
 import 'package:codexhub01/mentorship/session_list.dart';
 import 'package:codexhub01/mentorship/mentor_invites.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../main.dart'; // 👈 Import para ma-access 'themeNotifier'
-
+import '../main.dart';
 final supabase = Supabase.instance.client;
 
 class MentorDashboardScreen extends StatelessWidget {
@@ -17,19 +13,9 @@ class MentorDashboardScreen extends StatelessWidget {
 
   final List<Map<String, dynamic>> mentorFeatures = [
     {
-      'title': 'Progress Tracker',
-      'icon': Icons.show_chart,
-      'route': ProgressTrackerScreen(),
-    },
-    {
       'title': 'Resource Library',
       'icon': Icons.library_books,
       'route': ResourceLibraryScreen(),
-    },
-    {
-      'title': 'Analytics',
-      'icon': Icons.analytics,
-      'route': PerformanceAnalyticsScreen(),
     },
     {
       'title': 'Friend List',
@@ -37,7 +23,7 @@ class MentorDashboardScreen extends StatelessWidget {
       'route': MentorFriendPage(),
     },
     {
-      'title': 'Session Scheduling',
+      'title': 'Scheduled Session',
       'icon': Icons.calendar_today,
       'route': SessionListScreen(),
     },
@@ -58,40 +44,18 @@ class MentorDashboardScreen extends StatelessWidget {
         elevation: 4,
         automaticallyImplyLeading: false,
         actions: [
-          // 🌙 DARK MODE TOGGLE BUTTON
-          ValueListenableBuilder<ThemeMode>(
-            valueListenable: themeNotifier,
-            builder: (context, themeMode, _) {
-              return IconButton(
-                icon: Icon(
-                  themeMode == ThemeMode.dark
-                      ? Icons.light_mode
-                      : Icons.dark_mode,
-                ),
-                tooltip: "Toggle Dark Mode",
-                onPressed: () async {
-                  final prefs = await SharedPreferences.getInstance();
-                  if (themeNotifier.value == ThemeMode.dark) {
-                    themeNotifier.value = ThemeMode.light;
-                    await prefs.setBool('isDarkMode', false);
-                  } else {
-                    themeNotifier.value = ThemeMode.dark;
-                    await prefs.setBool('isDarkMode', true);
-                  }
-                },
-              );
-            },
-          ),
-          // 👤 PROFILE BUTTON
+          // 👤 PROFILE BUTTON (dark mode will now be inside ProfileScreen)
           IconButton(
-            icon: const Icon(Icons.person),
-            onPressed:
-                () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
-                ),
-            tooltip: "Profile Settings",
-          ),
+  icon: const Icon(Icons.person),
+  onPressed: () => Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => ProfileScreen(themeNotifier: themeNotifier),
+    ),
+  ),
+  tooltip: "Profile Settings",
+),
+
         ],
       ),
       body: Column(

@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:codexhub01/services/messageservice.dart';
-import 'package:codexhub01/services/call_service.dart';
+import 'package:codexhub01/services/call_services.dart';
+import 'package:codexhub01/parts/call_page.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ChatScreen extends StatefulWidget {
   final String otherUserId;
@@ -19,86 +21,213 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final MessageService service = MessageService();
-  final CallService callService = CallService();
+  final CallService _callService = CallService();
+
   final TextEditingController messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
   List<Map<String, dynamic>> messages = [];
   StreamSubscription? _messageSub;
+  StreamSubscription? _callStatusSub;
+  StreamSubscription? _incomingCallSub;
 
- @override
-void initState() {
-  super.initState();
+  bool isDialogOpen = false;
+  final Set<String> activeCallIDs = {};
 
-  // 1️⃣ Listen to real-time messages sa conversation
-  _messageSub = service.messageStream(widget.otherUserId).listen((newMsgs) {
-    if (!mounted) return;
+  @override
+  void initState() {
+    super.initState();
+    _listenMessages();
+    _listenIncomingCalls();
+  }
 
-    bool updated = false;
+  void _listenMessages() {
+    _messageSub = service.messageStream(widget.otherUserId).listen((newMsgs) {
+      setState(() {
+        messages = newMsgs;
+      });
+      _scrollToBottom();
+    });
+  }
 
-    for (var msg in newMsgs) {
-      // Iwasan ang duplicates
-      if (!messages.any((m) => m['id'] == msg['id'])) {
-        messages.add(msg);
-        updated = true;
+  void _listenIncomingCalls() {
+  final currentUser = Supabase.instance.client.auth.currentUser;
+  if (currentUser == null) return;
+  final currentUserId = currentUser.id;
+
+  _incomingCallSub = Supabase.instance.client
+      .from('calls')
+      .stream(primaryKey: ['id'])
+      .eq('receiver_id', currentUserId)
+      .listen((events) async {
+    if (events.isEmpty) return;
+
+    for (final call in events) {
+      final callID = call['id']?.toString() ?? '';
+      final status = call['status'] ?? '';
+
+      if (status == 'ringing' && !activeCallIDs.contains(callID) && mounted) {
+        activeCallIDs.add(callID);
+        await _showIncomingCallDialog(call);
+        activeCallIDs.remove(callID);
       }
     }
-
-    if (updated) {
-      setState(() {});       // UI updates agad
-      _scrollToBottom();     // auto scroll sa latest
-    }
   });
 }
 
-/// Send a message with instant local echo
-Future<void> _sendMessage() async {
-  final text = messageController.text.trim();
-  if (text.isEmpty) return;
+  Future<void> _showIncomingCallDialog(Map<String, dynamic> call) async {
+  if (isDialogOpen) return;
+  isDialogOpen = true;
 
-  final currentUserId = service.currentUserId;
-
-  // 1️⃣ Local echo: temporary message para makita agad sa UI
-  final localMsg = {
-    'id': DateTime.now().millisecondsSinceEpoch, // temporary ID
-    'sender_id': currentUserId,
-    'receiver_id': widget.otherUserId,
-    'message': text,
-    'created_at': DateTime.now().toUtc().toIso8601String(),
-  };
-
-  setState(() {
-    messages.add(localMsg);
-  });
-  _scrollToBottom();
-
-  messageController.clear();
-
-  // 2️⃣ Send sa Supabase
   try {
-    await service.sendMessage(widget.otherUserId, text);
-    // Real-time stream ng Supabase ang magpapatunay at magre-replace ng temp message kung kailangan
-  } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Failed to send message: $e')),
+    final callerName = call['caller_name'] ?? 'Unknown';
+    final callType = call['call_type'] ?? 'audio';
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: Text("Incoming $callType call"),
+          content: Text("$callerName is calling you"),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _callService.declineCall(call);
+              },
+              child: const Text("Decline"),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                final currentUser = Supabase.instance.client.auth.currentUser;
+                if (!mounted || currentUser == null) return;
+
+                await _callService.acceptCall(call); // Update status first
+
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => CallPage(
+                      callID: call['id'],
+                      userID: currentUser.id,
+                      userName: currentUser.userMetadata?['username'] ??
+                          currentUser.email ??
+                          'User',
+                      callType: callType,
+                    ),
+                  ),
+                );
+              },
+              child: const Text("Accept"),
+            ),
+          ],
+        );
+      },
     );
+  } finally {
+    if (mounted) isDialogOpen = false;
   }
 }
-  /// Start an audio or video call
-  Future<void> _startCall(String type) async {
+  Future<void> _sendMessage() async {
+    final text = messageController.text.trim();
+    if (text.isEmpty) return;
+
+    final currentUserId = service.currentUserId;
+    final localMsg = {
+      'id': DateTime.now().millisecondsSinceEpoch,
+      'sender_id': currentUserId,
+      'receiver_id': widget.otherUserId,
+      'message': text,
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+    };
+
+    setState(() {
+      messages.add(localMsg);
+    });
+    _scrollToBottom();
+    messageController.clear();
+
     try {
-      await callService.startCall(widget.otherUserId, type);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Calling ${widget.otherUserName} ($type)...')),
-      );
+      await service.sendMessage(widget.otherUserId, text);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to start $type call: $e')),
-      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to send message: $e')));
     }
   }
 
-  /// Scroll to bottom of chat
+  Future<void> _startCall(String type) async {
+  final currentUser = Supabase.instance.client.auth.currentUser;
+  if (currentUser == null) return;
+
+  final currentUserId = currentUser.id;
+  final currentUserName =
+      currentUser.userMetadata?['username'] ?? currentUser.email ?? 'User';
+
+  try {
+    // 1️⃣ Create call in Supabase
+    final callID = await _callService.startCall(
+      callerId: currentUserId,
+      receiverId: widget.otherUserId,
+      callType: type,
+    );
+
+    if (callID.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Failed to create call")));
+      return;
+    }
+
+    // 2️⃣ Show temporary "Calling..." UI
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        content: Text("Calling ${widget.otherUserName}..."),
+      ),
+    );
+
+    // 3️⃣ Cancel old subscription if exists
+    _callStatusSub?.cancel();
+
+    // 4️⃣ Listen to call status updates
+    _callStatusSub = _callService.listenCallStatus(callID).listen((events) async {
+      if (events.isEmpty) return;
+      final call = events.first;
+      final status = call['status'];
+
+      if (status == 'accepted' && mounted) {
+        Navigator.of(context).pop(); // remove "Calling..." dialog
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CallPage(
+              callID: callID,
+              userID: currentUserId,
+              userName: currentUserName,
+              callType: type,
+            ),
+          ),
+        );
+      } else if (status == 'declined' && mounted) {
+        Navigator.of(context).pop(); // remove "Calling..." dialog
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text("Call declined")));
+      } else if (status == 'ended' && mounted) {
+        Navigator.of(context).pop(); // remove dialog if call ended before accepted
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text("Call ended")));
+      }
+    });
+
+    // TODO: Optional push notification to receiver if offline
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text("Failed to start call: $e")));
+  }
+}
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
@@ -111,15 +240,6 @@ Future<void> _sendMessage() async {
     });
   }
 
-  @override
-  void dispose() {
-    _messageSub?.cancel();
-    messageController.dispose();
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  /// Format timestamp
   String _formatTime(String? timestamp) {
     if (timestamp == null) return '';
     final dateTime = DateTime.tryParse(timestamp)?.toLocal();
@@ -128,6 +248,16 @@ Future<void> _sendMessage() async {
     final minute = dateTime.minute.toString().padLeft(2, '0');
     final ampm = dateTime.hour >= 12 ? 'PM' : 'AM';
     return '$hour:$minute $ampm';
+  }
+
+  @override
+  void dispose() {
+    _messageSub?.cancel();
+    _callStatusSub?.cancel();
+    _incomingCallSub?.cancel();
+    messageController.dispose();
+    _scrollController.dispose();
+    super.dispose();
   }
 
   @override
@@ -154,12 +284,12 @@ Future<void> _sendMessage() async {
           IconButton(
             icon: const Icon(Icons.call),
             tooltip: "Audio Call",
-            onPressed: () => _startCall('audio'),
+            onPressed: () async => _startCall('audio'),
           ),
           IconButton(
             icon: const Icon(Icons.videocam),
             tooltip: "Video Call",
-            onPressed: () => _startCall('video'),
+            onPressed: () async => _startCall('video'),
           ),
         ],
       ),
@@ -232,32 +362,24 @@ Future<void> _sendMessage() async {
                 Expanded(
                   child: TextField(
                     controller: messageController,
-                    style: TextStyle(
-                      color: isDark ? Colors.white : Colors.black,
-                    ),
+                    style: TextStyle(color: isDark ? Colors.white : Colors.black),
                     decoration: InputDecoration(
                       hintText: "Type a message...",
-                      hintStyle: TextStyle(
-                        color: isDark ? Colors.white70 : Colors.grey,
-                      ),
+                      hintStyle: TextStyle(color: isDark ? Colors.white70 : Colors.grey),
                       filled: true,
                       fillColor: isDark ? Colors.grey.shade800 : Colors.white,
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(24),
                         borderSide: BorderSide.none,
                       ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 10,
-                      ),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                     ),
                     onSubmitted: (_) => _sendMessage(),
                   ),
                 ),
                 const SizedBox(width: 8),
                 CircleAvatar(
-                  backgroundColor:
-                      isDark ? Colors.indigoAccent.shade400 : Colors.indigo,
+                  backgroundColor: isDark ? Colors.indigoAccent.shade400 : Colors.indigo,
                   child: IconButton(
                     icon: const Icon(Icons.send, color: Colors.white),
                     onPressed: _sendMessage,
