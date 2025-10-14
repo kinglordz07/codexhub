@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class CollabCodeEditorScreen extends StatefulWidget {
   final String roomId;
   final bool isMentor;
+  
 
   const CollabCodeEditorScreen({
     super.key,
@@ -24,12 +25,15 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen> {
 
   bool isSaving = false;
   bool isLoading = true;
+  bool _isLocalEdit = false;
+
+  
 
   String selectedLanguage = 'python';
   String output = '';
 
-  bool _menteeTyping = false;
-  bool _mentorTyping = false;
+  bool _ignoreNextUpdate = false;
+
   Timer? _typingTimer;
   RealtimeChannel? _channel;
 
@@ -67,31 +71,23 @@ class Program {
     super.initState();
     _loadSession().then((_) => _subscribeRealtime());
 
-    _codeController.addListener(() {
-      if (!widget.isMentor) {
-        _menteeTyping = true;
-        _restartTypingTimer(() {
-          _updateLiveField('code', _codeController.text);
-          _menteeTyping = false;
-        });
-      }
-    });
+  _codeController.addListener(() {
+  if (_isLocalEdit) return;
 
+  _updateSpecificLine();
+  _updateCursorPosition();
+});
     _feedbackController.addListener(() {
-      if (widget.isMentor) {
-        _mentorTyping = true;
-        _restartTypingTimer(() {
-          _updateLiveField('mentor_feedback', _feedbackController.text);
-          _mentorTyping = false;
-        });
-      }
-    });
+  if (widget.isMentor) {
+    _updateLiveField('mentor_feedback', _feedbackController.text);
+  }
+});
   }
 
-  void _restartTypingTimer(VoidCallback callback) {
-    _typingTimer?.cancel();
-    _typingTimer = Timer(const Duration(milliseconds: 400), callback);
-  }
+  void _updateSpecificLine() {
+  final codeText = _codeController.text;
+  _updateLiveField('code', codeText);
+}
 
   Future<void> _loadSession() async {
     try {
@@ -122,55 +118,79 @@ class Program {
   }
 
   void _subscribeRealtime() {
-    _channel = supabase.channel('public:live_sessions')
-      ..onPostgresChanges(
-        event: PostgresChangeEvent.update,
-        schema: 'public',
-        table: 'live_sessions',
-        callback: (payload) {
-          final newData = payload.newRecord;
-          if (!mounted) return;
+  _channel = supabase.channel('public:live_sessions')
+    ..onPostgresChanges(
+      event: PostgresChangeEvent.update,
+      schema: 'public',
+      table: 'live_sessions',
+      callback: (payload) {
+  if (_ignoreNextUpdate) return; // 🛑 Skip if this update came from ourselves
 
-          setState(() {
-            // Update code for mentor
-            if (widget.isMentor && !_mentorTyping) {
-              _codeController.text = newData['code'] ?? _codeController.text;
-            }
+  final newData = payload.newRecord;
+  if (!mounted) return;
 
-            // Update output for both mentor and mentee
-            output = newData['output'] ?? output;
+  setState(() {
+  if (newData['code'] != null && newData['code'] != _codeController.text) {
+    _isLocalEdit = true; // 🧩 mark as external update
 
-            // Update mentor feedback for mentee
-            if (!widget.isMentor && !_menteeTyping) {
-              _feedbackController.text = newData['mentor_feedback'] ?? '';
-            }
+    final oldSelection = _codeController.selection;
+    _codeController.text = newData['code'] as String;
 
-            // Highlighted lines and comments
-            _highlightedLines = List<int>.from(newData['highlighted_lines'] ?? []);
-            _lineComments = Map<int, String>.from(newData['line_comments'] ?? {});
-          });
-        },
-      )
-      ..subscribe();
+    // keep cursor stable
+    final offset = oldSelection.baseOffset.clamp(0, _codeController.text.length);
+    _codeController.selection = TextSelection.collapsed(offset: offset);
 
-    debugPrint('✅ Realtime listening for room ${widget.roomId}');
+    _isLocalEdit = false;
   }
+
+  // ✅ update other fields
+  output = newData['output'] ?? output;
+
+  if (!widget.isMentor) {
+    _feedbackController.text = newData['mentor_feedback'] ?? '';
+  }
+
+  _highlightedLines = List<int>.from(newData['highlighted_lines'] ?? []);
+  _lineComments = Map<int, String>.from(newData['line_comments'] ?? {});
+});
+},
+    )
+    ..subscribe();
+
+  debugPrint('✅ Realtime listening for room ${widget.roomId}');
+}
 
   Future<void> _updateLiveField(String field, dynamic value) async {
-    try {
-      dynamic supabaseValue = value;
-      if (field == 'line_comments' && value is Map<int, String>) {
-        supabaseValue = value.map<String, String>((k, v) => MapEntry(k.toString(), v));
-      }
-
-      await supabase
-          .from('live_sessions')
-          .update({field: supabaseValue})
-          .eq('id', widget.roomId);
-    } catch (e) {
-      debugPrint('⚠️ Error updating $field: $e');
+  try {
+    _ignoreNextUpdate = true; // 🟢 prevent self-trigger
+    dynamic supabaseValue = value;
+    if (field == 'line_comments' && value is Map<int, String>) {
+      supabaseValue = value.map<String, String>((k, v) => MapEntry(k.toString(), v));
     }
+
+    await supabase
+        .from('live_sessions')
+        .update({field: supabaseValue})
+        .eq('id', widget.roomId);
+  } catch (e) {
+    debugPrint('⚠️ Error updating $field: $e');
+  } finally {
+    // 🔵 Delay unflag para sure na tapos muna ang DB update
+    Future.delayed(const Duration(milliseconds: 400), () {
+      _ignoreNextUpdate = false;
+    });
   }
+}
+
+  void _updateCursorPosition() {
+  final cursorPos = _codeController.selection.baseOffset;
+  if (widget.isMentor) {
+    _updateLiveField('mentor_cursor', cursorPos);
+  } else {
+    _updateLiveField('mentee_cursor', cursorPos);
+  }
+}
+
 
   Future<void> _saveCode() async {
   if (isSaving) return;
@@ -211,25 +231,22 @@ class Program {
 
 
   Future<void> _runCode() async {
-    if (widget.isMentor) return;
-
-    final codeToRun = _codeController.text;
-    if (codeToRun.isEmpty) {
-      setState(() => output = '⚠️ No valid code to run.');
-      await _updateLiveField('output', output);
-      return;
-    }
-
-    setState(() => output = 'Running code...');
-    await Future.delayed(const Duration(milliseconds: 500));
-
-    final result = _getFakeExecutionResult(codeToRun, selectedLanguage);
-    setState(() => output = result);
-
-    // Save output for mentor in real-time
-    await _updateLiveField('output', result);
+  final codeToRun = _codeController.text;
+  if (codeToRun.isEmpty) {
+    setState(() => output = '⚠️ No valid code to run.');
+    await _updateLiveField('output', output);
+    return;
   }
 
+  setState(() => output = 'Running code...');
+  await Future.delayed(const Duration(milliseconds: 500));
+
+  final result = _getFakeExecutionResult(codeToRun, selectedLanguage);
+  setState(() => output = result);
+
+  // Update output for both mentor and mentee in real-time
+  await _updateLiveField('output', result);
+}
   String _getFakeExecutionResult(String code, String language) {
   List<String> results = [];
 
@@ -297,19 +314,32 @@ class Program {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('CodeLiveReview'),
-        actions: [
-          if (!widget.isMentor)
-            IconButton(
-              icon: isSaving
-                  ? const CircularProgressIndicator(color: Colors.white)
-                  : const Icon(Icons.save),
-              onPressed: _saveCode,
-            ),
-          if (!widget.isMentor)
-            IconButton(icon: const Icon(Icons.play_arrow), onPressed: _runCode),
-        ],
+  title: const Text('CodeLiveReview'),
+  actions: [
+    // Mentee buttons
+    if (!widget.isMentor)
+      IconButton(
+        icon: isSaving
+            ? const CircularProgressIndicator(color: Colors.white)
+            : const Icon(Icons.save),
+        onPressed: _saveCode,
       ),
+    if (!widget.isMentor)
+      IconButton(icon: const Icon(Icons.play_arrow), onPressed: _runCode),
+
+    // Mentor buttons (pwede na rin mag-save/run)
+    if (widget.isMentor)
+      IconButton(
+        icon: isSaving
+            ? const CircularProgressIndicator(color: Colors.white)
+            : const Icon(Icons.save),
+        onPressed: _saveCode,
+      ),
+    if (widget.isMentor)
+      IconButton(icon: const Icon(Icons.play_arrow), onPressed: _runCode),
+  ],
+),
+
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
           : Padding(

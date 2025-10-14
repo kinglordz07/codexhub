@@ -32,6 +32,7 @@ class _ChatScreenState extends State<ChatScreen> {
   StreamSubscription? _incomingCallSub;
 
   bool isDialogOpen = false;
+  bool isSending = false;
   final Set<String> activeCallIDs = {};
 
   @override
@@ -41,7 +42,9 @@ class _ChatScreenState extends State<ChatScreen> {
     _listenIncomingCalls();
   }
 
+  // 🟢 Real-time listener for chat messages
   void _listenMessages() {
+    _messageSub?.cancel(); // ensure old listeners are removed first
     _messageSub = service.messageStream(widget.otherUserId).listen((newMsgs) {
       setState(() {
         messages = newMsgs;
@@ -50,89 +53,95 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  // 🟢 Real-time incoming call listener
   void _listenIncomingCalls() {
-  final currentUser = Supabase.instance.client.auth.currentUser;
-  if (currentUser == null) return;
-  final currentUserId = currentUser.id;
+    final currentUser = Supabase.instance.client.auth.currentUser;
+    if (currentUser == null) return;
+    final currentUserId = currentUser.id;
 
-  _incomingCallSub = Supabase.instance.client
-      .from('calls')
-      .stream(primaryKey: ['id'])
-      .eq('receiver_id', currentUserId)
-      .listen((events) async {
-    if (events.isEmpty) return;
+    _incomingCallSub = Supabase.instance.client
+        .from('calls')
+        .stream(primaryKey: ['id'])
+        .eq('receiver_id', currentUserId)
+        .listen((events) async {
+      if (events.isEmpty) return;
 
-    for (final call in events) {
-      final callID = call['id']?.toString() ?? '';
-      final status = call['status'] ?? '';
+      for (final call in events) {
+        final callID = call['id']?.toString() ?? '';
+        final status = call['status'] ?? '';
 
-      if (status == 'ringing' && !activeCallIDs.contains(callID) && mounted) {
-        activeCallIDs.add(callID);
-        await _showIncomingCallDialog(call);
-        activeCallIDs.remove(callID);
+        if (status == 'ringing' && !activeCallIDs.contains(callID) && mounted) {
+          activeCallIDs.add(callID);
+          await _showIncomingCallDialog(call);
+          activeCallIDs.remove(callID);
+        }
       }
-    }
-  });
-}
-
-  Future<void> _showIncomingCallDialog(Map<String, dynamic> call) async {
-  if (isDialogOpen) return;
-  isDialogOpen = true;
-
-  try {
-    final callerName = call['caller_name'] ?? 'Unknown';
-    final callType = call['call_type'] ?? 'audio';
-
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return AlertDialog(
-          title: Text("Incoming $callType call"),
-          content: Text("$callerName is calling you"),
-          actions: [
-            TextButton(
-              onPressed: () async {
-                Navigator.of(context).pop();
-                await _callService.declineCall(call);
-              },
-              child: const Text("Decline"),
-            ),
-            TextButton(
-              onPressed: () async {
-                Navigator.of(context).pop();
-                final currentUser = Supabase.instance.client.auth.currentUser;
-                if (!mounted || currentUser == null) return;
-
-                await _callService.acceptCall(call); // Update status first
-
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => CallPage(
-                      callID: call['id'],
-                      userID: currentUser.id,
-                      userName: currentUser.userMetadata?['username'] ??
-                          currentUser.email ??
-                          'User',
-                      callType: callType,
-                    ),
-                  ),
-                );
-              },
-              child: const Text("Accept"),
-            ),
-          ],
-        );
-      },
-    );
-  } finally {
-    if (mounted) isDialogOpen = false;
+    });
   }
-}
+
+  // 🟢 Handles call accept/decline dialogs
+  Future<void> _showIncomingCallDialog(Map<String, dynamic> call) async {
+    if (isDialogOpen) return;
+    isDialogOpen = true;
+
+    try {
+      final callerName = call['caller_name'] ?? 'Unknown';
+      final callType = call['call_type'] ?? 'audio';
+
+      await showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          return AlertDialog(
+            title: Text("Incoming $callType call"),
+            content: Text("$callerName is calling you"),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  Navigator.of(context).pop();
+                  await _callService.declineCall(call);
+                },
+                child: const Text("Decline"),
+              ),
+              TextButton(
+                onPressed: () async {
+                  Navigator.of(context).pop();
+                  final currentUser = Supabase.instance.client.auth.currentUser;
+                  if (!mounted || currentUser == null) return;
+
+                  await _callService.acceptCall(call);
+
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => CallPage(
+                        callID: call['id'],
+                        userID: currentUser.id,
+                        userName: currentUser.userMetadata?['username'] ??
+                            currentUser.email ??
+                            'User',
+                        callType: callType,
+                      ),
+                    ),
+                  );
+                },
+                child: const Text("Accept"),
+              ),
+            ],
+          );
+        },
+      );
+    } finally {
+      if (mounted) isDialogOpen = false;
+    }
+  }
+
+  // 🟢 Send message logic (with indicator)
   Future<void> _sendMessage() async {
     final text = messageController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || isSending) return;
+
+    setState(() => isSending = true);
 
     final currentUserId = service.currentUserId;
     final localMsg = {
@@ -141,6 +150,7 @@ class _ChatScreenState extends State<ChatScreen> {
       'receiver_id': widget.otherUserId,
       'message': text,
       'created_at': DateTime.now().toUtc().toIso8601String(),
+      'status': 'sending',
     };
 
     setState(() {
@@ -152,82 +162,84 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       await service.sendMessage(widget.otherUserId, text);
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to send message: $e')));
-    }
-  }
-
-  Future<void> _startCall(String type) async {
-  final currentUser = Supabase.instance.client.auth.currentUser;
-  if (currentUser == null) return;
-
-  final currentUserId = currentUser.id;
-  final currentUserName =
-      currentUser.userMetadata?['username'] ?? currentUser.email ?? 'User';
-
-  try {
-    // 1️⃣ Create call in Supabase
-    final callID = await _callService.startCall(
-      callerId: currentUserId,
-      receiverId: widget.otherUserId,
-      callType: type,
-    );
-
-    if (callID.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Failed to create call")));
-      return;
-    }
-
-    // 2️⃣ Show temporary "Calling..." UI
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => AlertDialog(
-        content: Text("Calling ${widget.otherUserName}..."),
-      ),
-    );
-
-    // 3️⃣ Cancel old subscription if exists
-    _callStatusSub?.cancel();
-
-    // 4️⃣ Listen to call status updates
-    _callStatusSub = _callService.listenCallStatus(callID).listen((events) async {
-      if (events.isEmpty) return;
-      final call = events.first;
-      final status = call['status'];
-
-      if (status == 'accepted' && mounted) {
-        Navigator.of(context).pop(); // remove "Calling..." dialog
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => CallPage(
-              callID: callID,
-              userID: currentUserId,
-              userName: currentUserName,
-              callType: type,
-            ),
-          ),
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to send message: $e')),
         );
-      } else if (status == 'declined' && mounted) {
-        Navigator.of(context).pop(); // remove "Calling..." dialog
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text("Call declined")));
-      } else if (status == 'ended' && mounted) {
-        Navigator.of(context).pop(); // remove dialog if call ended before accepted
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text("Call ended")));
       }
-    });
-
-    // TODO: Optional push notification to receiver if offline
-  } catch (e) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text("Failed to start call: $e")));
+    } finally {
+      if (mounted) setState(() => isSending = false);
+    }
   }
-}
+
+  // 🟢 Call setup logic
+  Future<void> _startCall(String type) async {
+    final currentUser = Supabase.instance.client.auth.currentUser;
+    if (currentUser == null) return;
+
+    final currentUserId = currentUser.id;
+    final currentUserName =
+        currentUser.userMetadata?['username'] ?? currentUser.email ?? 'User';
+
+    try {
+      final callID = await _callService.startCall(
+        callerId: currentUserId,
+        receiverId: widget.otherUserId,
+        callType: type,
+      );
+
+      if (callID.isEmpty) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text("Failed to create call")));
+        return;
+      }
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => AlertDialog(
+          content: Text("Calling ${widget.otherUserName}..."),
+        ),
+      );
+
+      _callStatusSub?.cancel();
+
+      _callStatusSub = _callService.listenCallStatus(callID).listen((events) async {
+        if (events.isEmpty) return;
+        final call = events.first;
+        final status = call['status'];
+
+        if (status == 'accepted' && mounted) {
+          Navigator.of(context).pop();
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => CallPage(
+                callID: callID,
+                userID: currentUserId,
+                userName: currentUserName,
+                callType: type,
+              ),
+            ),
+          );
+        } else if (status == 'declined' && mounted) {
+          Navigator.of(context).pop();
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text("Call declined")));
+        } else if (status == 'ended' && mounted) {
+          Navigator.of(context).pop();
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text("Call ended")));
+        }
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text("Failed to start call: $e")));
+      }
+    }
+  }
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
@@ -364,25 +376,29 @@ class _ChatScreenState extends State<ChatScreen> {
                     controller: messageController,
                     style: TextStyle(color: isDark ? Colors.white : Colors.black),
                     decoration: InputDecoration(
-                      hintText: "Type a message...",
-                      hintStyle: TextStyle(color: isDark ? Colors.white70 : Colors.grey),
+                      hintText: isSending ? "Sending..." : "Type a message...",
+                      hintStyle:
+                          TextStyle(color: isDark ? Colors.white70 : Colors.grey),
                       filled: true,
                       fillColor: isDark ? Colors.grey.shade800 : Colors.white,
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(24),
                         borderSide: BorderSide.none,
                       ),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
                     ),
                     onSubmitted: (_) => _sendMessage(),
+                    enabled: !isSending,
                   ),
                 ),
                 const SizedBox(width: 8),
                 CircleAvatar(
-                  backgroundColor: isDark ? Colors.indigoAccent.shade400 : Colors.indigo,
+                  backgroundColor:
+                      isDark ? Colors.indigoAccent.shade400 : Colors.indigo,
                   child: IconButton(
                     icon: const Icon(Icons.send, color: Colors.white),
-                    onPressed: _sendMessage,
+                    onPressed: isSending ? null : _sendMessage,
                   ),
                 ),
               ],
