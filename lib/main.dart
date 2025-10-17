@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:codexhub01/reusable_widgets/SessionsTabScreen.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -9,14 +10,12 @@ import 'package:codexhub01/parts/intro_screen.dart';
 import 'package:codexhub01/parts/learning_tools.dart';
 import 'package:codexhub01/parts/code_editor.dart';
 import 'package:codexhub01/parts/profilescreen.dart';
-import 'package:codexhub01/parts/create_live_lobby.dart';
 import 'package:codexhub01/utils/forgotpass.dart';
 import 'package:codexhub01/utils/resetpasscallback.dart';
 
 // 🔹 Collaboration & Mentorship Features
 import 'package:codexhub01/collabscreen/lobby.dart';
 import 'package:codexhub01/mentorship/friendlst.dart';
-import 'package:codexhub01/mentorship/schedulesession_screen.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 late final SupabaseClient supabase;
@@ -70,8 +69,16 @@ class CodeHubApp extends StatelessWidget {
             appBarTheme: const AppBarTheme(
               backgroundColor: Colors.indigo,
               foregroundColor: Colors.white,
-              elevation: 4,
+              iconTheme: IconThemeData(color: Colors.white),
               centerTitle: true,
+              elevation: 4,
+            ),
+            tabBarTheme: const TabBarThemeData(
+              labelColor: Colors.white,
+              unselectedLabelColor: Colors.white70,
+              indicator: UnderlineTabIndicator(
+                borderSide: BorderSide(color: Colors.white, width: 2),
+              ),
             ),
           ),
           darkTheme: ThemeData.dark().copyWith(
@@ -80,6 +87,16 @@ class CodeHubApp extends StatelessWidget {
             appBarTheme: const AppBarTheme(
               backgroundColor: Colors.indigo,
               foregroundColor: Colors.white,
+              iconTheme: IconThemeData(color: Colors.white),
+              centerTitle: true,
+              elevation: 4,
+            ),
+            tabBarTheme: const TabBarThemeData(
+              labelColor: Colors.white,
+              unselectedLabelColor: Colors.white70,
+              indicator: UnderlineTabIndicator(
+                borderSide: BorderSide(color: Colors.white, width: 2),
+              ),
             ),
           ),
           themeMode: themeMode,
@@ -149,15 +166,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       'route': CollabLobbyScreen(),
     },
     {
-      'title': 'Create Live Lobby',
-      'icon': Icons.video_call,
-      'route': CreateLiveLobby(
-        menteeId: supabase.auth.currentUser?.id ?? '',
-        menteeName:
-            supabase.auth.currentUser?.userMetadata?['username'] ?? 'Mentee',
-      ),
-    },
-    {
       'title': 'Friend List',
       'icon': Icons.people,
       'route': MentorFriendPage(),
@@ -178,9 +186,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       'route': LearningTools(),
     },
     {
-      'title': 'Sessions Scheduling',
+      'title': 'Sessions Tabs',
       'icon': Icons.calendar_today,
-      'route': ScheduleSessionScreen(),
+      'route': SessionsTabScreen(),
     },
   ];
 

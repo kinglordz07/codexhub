@@ -1,3 +1,5 @@
+// ignore_for_file: use_build_context_synchronously
+
 import 'package:flutter/material.dart';
 import 'package:codexhub01/parts/log_in.dart';
 import 'package:codexhub01/services/authservice.dart';
@@ -13,8 +15,7 @@ class _SignUpState extends State<SignUp> {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
-  final TextEditingController _confirmPasswordController =
-      TextEditingController();
+  final TextEditingController _confirmPasswordController = TextEditingController();
 
   String? _selectedRole;
   bool _isLoading = false;
@@ -121,107 +122,84 @@ class _SignUpState extends State<SignUp> {
   // ---------------- Build UI ----------------
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     return Scaffold(
-      body: Container(
-        width: double.infinity,
-        height: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Colors.white, Color(0xFFE3F2FD), Colors.white],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Form(
-              key: _formKey,
+      backgroundColor: theme.scaffoldBackgroundColor,
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Form(
+            key: _formKey,
+            child: Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.grey[850] : Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: isDark ? Colors.black45 : Colors.black12,
+                    blurRadius: 12,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
               child: Column(
                 children: [
-                  const Text(
+                  Text(
                     "Create Account",
-                    style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: isDark ? Colors.white : Colors.black87,
+                    ),
                   ),
                   const SizedBox(height: 20),
 
                   // Username
-                  TextFormField(
+                  _buildTextField(
                     controller: _usernameController,
-                    decoration: const InputDecoration(
-                      labelText: "Username",
-                      prefixIcon: Icon(Icons.person_outline),
-                    ),
+                    label: "Username",
+                    icon: Icons.person_outline,
                     validator: _validateUsername,
+                    isDark: isDark,
                   ),
                   const SizedBox(height: 20),
 
                   // Email
-                  TextFormField(
+                  _buildTextField(
                     controller: _emailController,
-                    decoration: const InputDecoration(
-                      labelText: "Email",
-                      prefixIcon: Icon(Icons.email_outlined),
-                    ),
+                    label: "Email",
+                    icon: Icons.email_outlined,
                     validator: _validateEmail,
+                    isDark: isDark,
                   ),
                   const SizedBox(height: 20),
 
                   // Password
-                  TextFormField(
+                  _buildPasswordField(
                     controller: _passwordController,
+                    label: "Password",
                     obscureText: _obscurePassword,
-                    decoration: InputDecoration(
-                      labelText: "Password",
-                      prefixIcon: const Icon(Icons.lock_outline),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _obscurePassword
-                              ? Icons.visibility
-                              : Icons.visibility_off,
-                        ),
-                        onPressed:
-                            () => _safeSetState(
-                              () => _obscurePassword = !_obscurePassword,
-                            ),
-                      ),
-                    ),
-                    validator: _validatePassword,
+                    toggleObscure: () => _safeSetState(() => _obscurePassword = !_obscurePassword),
+                    isDark: isDark,
                   ),
                   const SizedBox(height: 20),
 
                   // Confirm Password
-                  TextFormField(
+                  _buildPasswordField(
                     controller: _confirmPasswordController,
+                    label: "Confirm Password",
                     obscureText: _obscureConfirmPassword,
-                    decoration: InputDecoration(
-                      labelText: "Confirm Password",
-                      prefixIcon: const Icon(Icons.lock_outline),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _obscureConfirmPassword
-                              ? Icons.visibility
-                              : Icons.visibility_off,
-                        ),
-                        onPressed:
-                            () => _safeSetState(
-                              () =>
-                                  _obscureConfirmPassword =
-                                      !_obscureConfirmPassword,
-                            ),
-                      ),
-                    ),
-                    validator: _validateConfirmPassword,
+                    toggleObscure: () => _safeSetState(() => _obscureConfirmPassword = !_obscureConfirmPassword),
+                    isDark: isDark,
                   ),
                   const SizedBox(height: 20),
 
                   // Role Dropdown
                   DropdownButtonFormField<String>(
                     initialValue: _selectedRole,
-                    onChanged:
-                        _isLoading
-                            ? null
-                            : (v) => _safeSetState(() => _selectedRole = v),
+                    onChanged: _isLoading ? null : (v) => _safeSetState(() => _selectedRole = v),
                     items: const [
                       DropdownMenuItem(value: "user", child: Text("User")),
                       DropdownMenuItem(value: "mentor", child: Text("Mentor")),
@@ -232,35 +210,45 @@ class _SignUpState extends State<SignUp> {
                   const SizedBox(height: 30),
 
                   // Sign Up Button
-                  _isLoading
-                      ? const CircularProgressIndicator()
-                      : SizedBox(
-                        width: double.infinity,
-                        height: 50,
-                        child: ElevatedButton(
-                          onPressed: _signUp,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.blue,
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: _isLoading
+                        ? const Center(child: CircularProgressIndicator())
+                        : ElevatedButton(
+                            onPressed: _signUp,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: theme.colorScheme.primary,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                            child: const Text(
+                              "Create Account",
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                            ),
                           ),
-                          child: const Text(
-                            "Create Account",
-                            style: TextStyle(color: Colors.white, fontSize: 16),
-                          ),
-                        ),
-                      ),
+                  ),
                   const SizedBox(height: 20),
 
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Text("Already have an account?"),
+                      Text(
+                        "Already have an account?",
+                        style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
+                      ),
                       TextButton(
-                        onPressed:
-                            () => Navigator.pushReplacement(
-                              context,
-                              MaterialPageRoute(builder: (_) => const SignIn()),
-                            ),
-                        child: const Text("Login"),
+                        onPressed: () => Navigator.pushReplacement(
+                          context,
+                          MaterialPageRoute(builder: (_) => const SignIn()),
+                        ),
+                        child: Text(
+                          "Login",
+                          style: TextStyle(
+                            color: theme.colorScheme.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -268,6 +256,61 @@ class _SignUpState extends State<SignUp> {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  // ---------------- Helper Widgets ----------------
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    required String? Function(String?)? validator,
+    required bool isDark,
+  }) {
+    return TextFormField(
+      controller: controller,
+      validator: validator,
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: Icon(icon),
+        filled: true,
+        fillColor: isDark ? Colors.grey[800] : Colors.grey[100],
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPasswordField({
+    required TextEditingController controller,
+    required String label,
+    required bool obscureText,
+    required VoidCallback toggleObscure,
+    required bool isDark,
+  }) {
+    return TextFormField(
+      controller: controller,
+      obscureText: obscureText,
+      validator: label == "Confirm Password" ? _validateConfirmPassword : _validatePassword,
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: const Icon(Icons.lock_outline),
+        filled: true,
+        fillColor: isDark ? Colors.grey[800] : Colors.grey[100],
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide.none,
+        ),
+        suffixIcon: IconButton(
+          icon: Icon(
+            obscureText ? Icons.visibility : Icons.visibility_off,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          onPressed: toggleObscure,
         ),
       ),
     );

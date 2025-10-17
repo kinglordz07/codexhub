@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:codexhub01/collabscreen/room.dart';
+import 'collab_room_tabs.dart';
 
 class CollabLobbyScreen extends StatefulWidget {
   const CollabLobbyScreen({super.key});
@@ -20,72 +20,88 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
     _fetchRooms();
   }
 
-  // In your room creation method
-Future<void> _createRoom(String name) async {
-  final user = supabase.auth.currentUser;
-  if (user == null) return;
+  // Create room
+  Future<void> _createRoom(String name) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
 
-  try {
-    final room = await supabase
-        .from('rooms')
-        .insert({
-          'name': name, 
-          'creator_id': user.id  // Changed from owner_id to creator_id
-        })
-        .select()
-        .single();
+    try {
+      final room = await supabase
+          .from('rooms')
+          .insert({
+            'name': name,
+            'creator_id': user.id,
+          })
+          .select()
+          .single();
 
-    // Auto-join creator
-    await supabase.from('room_members').insert({
-      'room_id': room['id'],
-      'user_id': user.id,
-    });
-
-    if (!mounted) return;
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => CollabRoomScreen(
-          roomId: room['id'], 
-          roomName: room['name']
-        ),
-      ),
-    );
-  } catch (e) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Error creating room: ${e.toString()}')),
-    );
-  }
-}
-
-// In your room fetching method
-Future<void> _fetchRooms() async {
-  setState(() => isLoading = true);
-  try {
-    final response = await supabase
-        .from('rooms')
-        .select('id, name, creator_id, created_at, is_public') // Use creator_id
-        .order('created_at', ascending: false);
-
-    if (mounted) {
-      setState(() {
-        rooms = List<Map<String, dynamic>>.from(response);
+      // Auto-join creator
+      await supabase.from('room_members').insert({
+        'room_id': room['id'],
+        'user_id': user.id,
       });
-    }
-  } catch (e) {
-    if (mounted) {
+
+      if (!mounted) return;
+
+      // Check if there's a live session
+      final session = await supabase
+          .from('live_sessions')
+          .select()
+          .eq('room_id', room['id'])
+          .maybeSingle();
+
+      String mentorId = '';
+      String menteeId = '';
+
+      if (session != null) {
+        mentorId = session['mentor_id'] ?? '';
+        menteeId = session['mentee_id'] ?? '';
+      }
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CollabRoomTabs(
+            roomId: room['id'].toString(),
+            roomName: room['name'].toString(),
+            isMentor: user.id == mentorId,
+            mentorId: mentorId,
+            menteeId: menteeId,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error fetching rooms: ${e.toString()}')),
+        SnackBar(content: Text('Error creating room: ${e.toString()}')),
       );
     }
-  } finally {
-    if (mounted) {
-      setState(() => isLoading = false);
+  }
+
+  // Fetch rooms
+  Future<void> _fetchRooms() async {
+    setState(() => isLoading = true);
+    try {
+      final response = await supabase
+          .from('rooms')
+          .select('id, name, creator_id, created_at, is_public')
+          .order('created_at', ascending: false);
+
+      if (mounted) {
+        setState(() {
+          rooms = List<Map<String, dynamic>>.from(response);
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error fetching rooms: ${e.toString()}')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => isLoading = false);
     }
   }
-}
 
   Future<void> _showJoinRoomDialog() async {
     final user = supabase.auth.currentUser;
@@ -99,27 +115,26 @@ Future<void> _fetchRooms() async {
     final roomIdController = TextEditingController();
     final result = await showDialog<bool>(
       context: context,
-      builder:
-          (context) => AlertDialog(
-            title: const Text("Join Room"),
-            content: TextField(
-              controller: roomIdController,
-              decoration: const InputDecoration(
-                hintText: "Enter Room ID",
-                border: OutlineInputBorder(),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text("Cancel"),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text("Join"),
-              ),
-            ],
+      builder: (context) => AlertDialog(
+        title: const Text("Join Room"),
+        content: TextField(
+          controller: roomIdController,
+          decoration: const InputDecoration(
+            hintText: "Enter Room ID",
+            border: OutlineInputBorder(),
           ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text("Join"),
+          ),
+        ],
+      ),
     );
 
     if (result != true) return;
@@ -130,6 +145,7 @@ Future<void> _fetchRooms() async {
     await _joinRoom(roomId);
   }
 
+  // Join room
   Future<void> _joinRoom(String roomId) async {
     final user = supabase.auth.currentUser;
     if (user == null) return;
@@ -141,13 +157,12 @@ Future<void> _fetchRooms() async {
 
       if (room == null) {
         if (!mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text("Room not found")));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text("Room not found")));
         return;
       }
 
-      // Check if user is already a member
+      // Add user if not already a member
       final existing = await supabase
           .from('room_members')
           .select()
@@ -161,14 +176,32 @@ Future<void> _fetchRooms() async {
         });
       }
 
-      if (!mounted) return;
+      // Fetch live session
+      final session = await supabase
+          .from('live_sessions')
+          .select()
+          .eq('room_id', roomId)
+          .maybeSingle();
 
+      String mentorId = '';
+      String menteeId = '';
+
+      if (session != null) {
+        mentorId = session['mentor_id'] ?? '';
+        menteeId = session['mentee_id'] ?? '';
+      }
+
+      if (!mounted) return;
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder:
-              (context) =>
-                  CollabRoomScreen(roomId: roomId, roomName: room['name']),
+          builder: (_) => CollabRoomTabs(
+            roomId: roomId,
+            roomName: room['name'],
+            isMentor: user.id == mentorId,
+            mentorId: mentorId,
+            menteeId: menteeId,
+          ),
         ),
       );
     } catch (e) {
@@ -191,27 +224,26 @@ Future<void> _fetchRooms() async {
     final roomNameController = TextEditingController();
     final result = await showDialog<bool>(
       context: context,
-      builder:
-          (context) => AlertDialog(
-            title: const Text("Create Room"),
-            content: TextField(
-              controller: roomNameController,
-              decoration: const InputDecoration(
-                hintText: "Enter room name",
-                border: OutlineInputBorder(),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text("Cancel"),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text("Create"),
-              ),
-            ],
+      builder: (context) => AlertDialog(
+        title: const Text("Create Room"),
+        content: TextField(
+          controller: roomNameController,
+          decoration: const InputDecoration(
+            hintText: "Enter room name",
+            border: OutlineInputBorder(),
           ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text("Create"),
+          ),
+        ],
+      ),
     );
 
     if (result != true) return;
@@ -221,10 +253,6 @@ Future<void> _fetchRooms() async {
 
     await _createRoom(name);
   }
-
-
-
-
 
   @override
   Widget build(BuildContext context) {
@@ -273,31 +301,28 @@ Future<void> _fetchRooms() async {
             ),
             const SizedBox(height: 12),
             Expanded(
-              child:
-                  isLoading
-                      ? const Center(child: CircularProgressIndicator())
-                      : rooms.isEmpty
-                      ? const Center(
-                        child: Text("No rooms available. Create one!"),
-                      )
+              child: isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : rooms.isEmpty
+                      ? const Center(child: Text("No rooms available. Create one!"))
                       : ListView.builder(
-                        itemCount: rooms.length,
-                        itemBuilder: (context, index) {
-                          final room = rooms[index];
-                          return Card(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            child: ListTile(
-                              leading: const Icon(Icons.meeting_room),
-                              title: Text(room['name']),
-                              subtitle: Text("ID: ${room['id']}"),
-                              trailing: IconButton(
-                                icon: const Icon(Icons.arrow_forward),
-                                onPressed: () => _joinRoom(room['id']),
+                          itemCount: rooms.length,
+                          itemBuilder: (context, index) {
+                            final room = rooms[index];
+                            return Card(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              child: ListTile(
+                                leading: const Icon(Icons.meeting_room),
+                                title: Text(room['name']),
+                                subtitle: Text("ID: ${room['id']}"),
+                                trailing: IconButton(
+                                  icon: const Icon(Icons.arrow_forward),
+                                  onPressed: () => _joinRoom(room['id']),
+                                ),
                               ),
-                            ),
-                          );
-                        },
-                      ),
+                            );
+                          },
+                        ),
             ),
           ],
         ),

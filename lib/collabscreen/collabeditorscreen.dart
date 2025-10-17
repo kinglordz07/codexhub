@@ -1,3 +1,5 @@
+// ignore_for_file: prefer_final_fields
+
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -5,40 +7,43 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class CollabCodeEditorScreen extends StatefulWidget {
   final String roomId;
   final bool isMentor;
-  
+  final bool isReadOnly;
+  final String? liveSessionId;
 
   const CollabCodeEditorScreen({
-    super.key,
     required this.roomId,
-    this.isMentor = false,
+    required this.isMentor,
+    required this.isReadOnly,
+    this.liveSessionId,
+    super.key,
   });
 
   @override
-  State<CollabCodeEditorScreen> createState() =>
-      _CollabCodeEditorScreenState();
+  State<CollabCodeEditorScreen> createState() => _CollabCodeEditorScreenState();
 }
 
 class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen> {
   final SupabaseClient supabase = Supabase.instance.client;
   final TextEditingController _codeController = TextEditingController();
   final TextEditingController _feedbackController = TextEditingController();
+  final ScrollController _codeScrollController = ScrollController();
 
   bool isSaving = false;
   bool isLoading = true;
+  bool canEdit = false;
   bool _isLocalEdit = false;
-
-  
 
   String selectedLanguage = 'python';
   String output = '';
+  String? _mentorId;
+  String? _menteeId;
+  String? _currentUserId;
 
-  bool _ignoreNextUpdate = false;
-
+  int? _otherUserCursor;
   Timer? _typingTimer;
+  Timer? _cursorTimer;
   RealtimeChannel? _channel;
-
-  List<int> _highlightedLines = [];
-  Map<int, String> _lineComments = {};
+  Color _feedbackBg = Colors.transparent;
 
   final Map<String, String> defaultSnippets = {
     'python': 'print("Hello, World!")',
@@ -69,354 +74,357 @@ class Program {
   @override
   void initState() {
     super.initState();
-    _loadSession().then((_) => _subscribeRealtime());
-
-  _codeController.addListener(() {
-  if (_isLocalEdit) return;
-
-  _updateSpecificLine();
-  _updateCursorPosition();
-});
-    _feedbackController.addListener(() {
-  if (widget.isMentor) {
-    _updateLiveField('mentor_feedback', _feedbackController.text);
-  }
-});
+    _initSession();
   }
 
-  void _updateSpecificLine() {
-  final codeText = _codeController.text;
-  _updateLiveField('code', codeText);
-}
+  Future<void> _initSession() async {
+    await _loadSession();
+    _setupListeners();
+    _subscribeRealtime();
+  }
 
   Future<void> _loadSession() async {
-    try {
-      final session = await supabase
-          .from('live_sessions')
-          .select()
-          .eq('id', widget.roomId)
-          .maybeSingle();
+  try {
+    _currentUserId = supabase.auth.currentUser?.id;
 
-      if (session != null) {
-        selectedLanguage = session['language'] ?? 'python';
-        final rawCode = (session['code'] ?? '').toString();
-        _codeController.text =
-            rawCode.isEmpty ? (defaultSnippets[selectedLanguage] ?? '') : rawCode;
+    // Kunin ang existing session para sa room
+    final session = await supabase
+        .from('live_sessions')
+        .select()
+        .eq('room_id', widget.roomId)
+        .maybeSingle();
 
-        output = session['output'] ?? '';
-        _feedbackController.text = session['mentor_feedback'] ?? '';
-        _highlightedLines = List<int>.from(session['highlighted_lines'] ?? []);
-        _lineComments = Map<int, String>.from(session['line_comments'] ?? {});
-      } else {
-        _codeController.text = defaultSnippets[selectedLanguage] ?? '';
-      }
-    } catch (e) {
-      debugPrint('❌ Error loading session: $e');
-    } finally {
-      if (mounted) setState(() => isLoading = false);
+    if (session != null) {
+      _mentorId = session['mentor_id'];
+      _menteeId = session['mentee_id'];
+      selectedLanguage = session['language'] ?? 'python';
+
+      // Para sa viewers at editors pareho, set the code + output
+      _codeController.text = session['code'] ?? defaultSnippets[selectedLanguage]!;
+      output = session['output'] ?? '';
+      _feedbackController.text = session['mentor_feedback'] ?? '';
+
+      // Edit permission lang sa mentor/mentee
+      canEdit = (_currentUserId == _mentorId || _currentUserId == _menteeId);
+    } else {
+      // Kung walang session, gumawa ng bagong session (auto editor)
+      final newSession = await supabase.from('live_sessions').insert({
+        'room_id': widget.roomId,
+        'language': selectedLanguage,
+        'code': defaultSnippets[selectedLanguage] ?? '',
+        'is_live': true,
+        'waiting': false,
+      }).select().maybeSingle();
+
+      _codeController.text = newSession?['code'] ?? '';
+      output = newSession?['output'] ?? '';
+      canEdit = true; // gumawa ng bagong session, creator can edit
     }
+  } catch (e) {
+    debugPrint('❌ Error loading session: $e');
+  } finally {
+    if (mounted) setState(() => isLoading = false);
+  }
+}
+
+  void _setupListeners() {
+    _codeController.addListener(() {
+      if (!canEdit) return;
+      _isLocalEdit = true;
+
+      _restartTypingTimer(() async {
+        await _updateLiveField('code', _codeController.text);
+        _isLocalEdit = false;
+      });
+
+      _restartCursorTimer(() async {
+        await _updateLiveField(
+          widget.isMentor ? 'mentor_cursor' : 'mentee_cursor',
+          _codeController.selection.baseOffset,
+        );
+      });
+    });
+
+    _feedbackController.addListener(() {
+      if (!canEdit || !_isMentorCurrentUser()) return;
+      _restartTypingTimer(() async {
+        await _updateLiveField('mentor_feedback', _feedbackController.text);
+      });
+    });
   }
 
   void _subscribeRealtime() {
-  _channel = supabase.channel('public:live_sessions')
+  final channelName = 'live_sessions:${widget.roomId}';
+
+  _channel = supabase.channel(channelName)
     ..onPostgresChanges(
       event: PostgresChangeEvent.update,
       schema: 'public',
       table: 'live_sessions',
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'room_id',
+        value: widget.roomId,
+      ),
       callback: (payload) {
-  if (_ignoreNextUpdate) return; // 🛑 Skip if this update came from ourselves
+        if (!mounted) return;
+        final newData = payload.newRecord;
+        if (newData.isEmpty) return;
 
-  final newData = payload.newRecord;
-  if (!mounted) return;
+        // Viewer lang, di kailangan i-block
+        if (_isLocalEdit && canEdit) return;
 
-  setState(() {
-  if (newData['code'] != null && newData['code'] != _codeController.text) {
-    _isLocalEdit = true; // 🧩 mark as external update
+        setState(() {
+          final remoteCode = newData['code'];
+          if (remoteCode != null && remoteCode != _codeController.text) {
+            final oldSel = _codeController.selection;
+            _codeController.text = remoteCode;
+            final offset = oldSel.baseOffset.clamp(0, _codeController.text.length);
+            _codeController.selection = TextSelection.collapsed(offset: offset);
+          }
 
-    final oldSelection = _codeController.selection;
-    _codeController.text = newData['code'] as String;
+          if (newData['mentor_feedback'] != null) {
+            _feedbackController.text = newData['mentor_feedback'];
+          }
 
-    // keep cursor stable
-    final offset = oldSelection.baseOffset.clamp(0, _codeController.text.length);
-    _codeController.selection = TextSelection.collapsed(offset: offset);
+          final otherCursorField = (_currentUserId == _mentorId) ? 'mentee_cursor' : 'mentor_cursor';
+          _otherUserCursor = newData[otherCursorField];
 
-    _isLocalEdit = false;
-  }
-
-  // ✅ update other fields
-  output = newData['output'] ?? output;
-
-  if (!widget.isMentor) {
-    _feedbackController.text = newData['mentor_feedback'] ?? '';
-  }
-
-  _highlightedLines = List<int>.from(newData['highlighted_lines'] ?? []);
-  _lineComments = Map<int, String>.from(newData['line_comments'] ?? {});
-});
-},
+          output = newData['output'] ?? output;
+        });
+      },
     )
-    ..subscribe();
+    ..subscribe((RealtimeSubscribeStatus status, [Object? error]) {
+      debugPrint('🔔 Channel $channelName → $status');
+      if (error != null) debugPrint('⚠️ Channel error: $error');
 
-  debugPrint('✅ Realtime listening for room ${widget.roomId}');
+      if (status == RealtimeSubscribeStatus.closed) {
+        Future.delayed(const Duration(seconds: 2), _subscribeRealtime);
+      }
+    });
+
+  debugPrint('✅ Subscribed to live room: ${widget.roomId}');
 }
 
   Future<void> _updateLiveField(String field, dynamic value) async {
-  try {
-    _ignoreNextUpdate = true; // 🟢 prevent self-trigger
-    dynamic supabaseValue = value;
-    if (field == 'line_comments' && value is Map<int, String>) {
-      supabaseValue = value.map<String, String>((k, v) => MapEntry(k.toString(), v));
+    try {
+      await supabase
+          .from('live_sessions')
+          .update({
+            field: value,
+            'last_editor': _currentUserId,
+          })
+          .eq('room_id', widget.roomId);
+    } catch (e) {
+      debugPrint('⚠️ Error updating $field: $e');
     }
-
-    await supabase
-        .from('live_sessions')
-        .update({field: supabaseValue})
-        .eq('id', widget.roomId);
-  } catch (e) {
-    debugPrint('⚠️ Error updating $field: $e');
-  } finally {
-    // 🔵 Delay unflag para sure na tapos muna ang DB update
-    Future.delayed(const Duration(milliseconds: 400), () {
-      _ignoreNextUpdate = false;
-    });
   }
-}
 
-  void _updateCursorPosition() {
-  final cursorPos = _codeController.selection.baseOffset;
-  if (widget.isMentor) {
-    _updateLiveField('mentor_cursor', cursorPos);
-  } else {
-    _updateLiveField('mentee_cursor', cursorPos);
+  bool _isMentorCurrentUser() => _currentUserId == _mentorId;
+
+  void _restartTypingTimer(VoidCallback callback) {
+    _typingTimer?.cancel();
+    _typingTimer = Timer(const Duration(milliseconds: 400), callback);
   }
-}
 
+  void _restartCursorTimer(VoidCallback callback) {
+    _cursorTimer?.cancel();
+    _cursorTimer = Timer(const Duration(milliseconds: 150), callback);
+  }
 
   Future<void> _saveCode() async {
-  if (isSaving) return;
-  setState(() => isSaving = true);
+    if (isSaving || !canEdit) return;
+    setState(() => isSaving = true);
 
-  try {
-    // Prepare data
-    final Map<String, dynamic> dataToSave = {
-      'code': _codeController.text,
-      'language': selectedLanguage,
-      'output': output,
-      'mentor_feedback': _feedbackController.text,
-      'highlighted_lines': _highlightedLines,
-      'line_comments': _lineComments.map((k, v) => MapEntry(k.toString(), v)),
-    };
+    try {
+      await supabase.from('live_sessions').update({
+        'code': _codeController.text,
+        'language': selectedLanguage,
+        'output': output,
+        'mentor_feedback': _feedbackController.text,
+        'last_editor': _currentUserId,
+      }).eq('room_id', widget.roomId);
 
-    // Save to Supabase
-    await supabase
-        .from('live_sessions')
-        .update(dataToSave)
-        .eq('id', widget.roomId);
-
-    // Feedback
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('Code saved!')));
-  } catch (e, st) {
-    debugPrint('❌ Error saving code: $e');
-    debugPrint('$st');
-    if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Failed to save code')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('💾 Code saved!')),
+        );
+      }
+    } catch (e) {
+      debugPrint('❌ Error saving code: $e');
+    } finally {
+      setState(() => isSaving = false);
     }
-  } finally {
-    setState(() => isSaving = false);
   }
-}
-
 
   Future<void> _runCode() async {
-  final codeToRun = _codeController.text;
-  if (codeToRun.isEmpty) {
-    setState(() => output = '⚠️ No valid code to run.');
-    await _updateLiveField('output', output);
-    return;
+    if (!canEdit) return;
+    setState(() => output = 'Running code...');
+    await Future.delayed(const Duration(milliseconds: 500));
+    final result = _getFakeExecutionResult(_codeController.text, selectedLanguage);
+    setState(() => output = result);
+    await _updateLiveField('output', result);
   }
 
-  setState(() => output = 'Running code...');
-  await Future.delayed(const Duration(milliseconds: 500));
-
-  final result = _getFakeExecutionResult(codeToRun, selectedLanguage);
-  setState(() => output = result);
-
-  // Update output for both mentor and mentee in real-time
-  await _updateLiveField('output', result);
-}
   String _getFakeExecutionResult(String code, String language) {
-  List<String> results = [];
+    final regexes = {
+      'python': RegExp(r'print\s*\((.*?)\)', dotAll: true),
+      'java': RegExp(r'System\.out\.println\s*\((.*?)\)\s*;', dotAll: true),
+      'csharp': RegExp(r'Console\.WriteLine\s*\((.*?)\)\s*;', dotAll: true),
+      'vbnet': RegExp(r'Console\.WriteLine\s*\((.*?)\)', dotAll: true),
+    };
 
-  if (language == 'python') {
-    final regex = RegExp(r'print\s*\((.*?)\)', dotAll: true);
-    final matches = regex.allMatches(code);
-    for (var m in matches) {
-      var content = m.group(1) ?? '';
-      if ((content.startsWith('"') && content.endsWith('"')) ||
-          (content.startsWith("'") && content.endsWith("'"))) {
-        content = content.substring(1, content.length - 1);
+    final matches = regexes[language]?.allMatches(code) ?? [];
+    final results = matches.map((m) {
+      var text = m.group(1) ?? '';
+      if (text.startsWith('"') || text.startsWith("'")) {
+        text = text.substring(1, text.length - 1);
       }
-      results.add(content);
-    }
-  } else if (language == 'java') {
-    final regex = RegExp(r'System\.out\.println\s*\((.*?)\)\s*;', dotAll: true);
-    final matches = regex.allMatches(code);
-    for (var m in matches) {
-      var content = m.group(1) ?? '';
-      if ((content.startsWith('"') && content.endsWith('"')) ||
-          (content.startsWith("'") && content.endsWith("'"))) {
-        content = content.substring(1, content.length - 1);
-      }
-      results.add(content);
-    }
-  } else if (language == 'csharp') {
-    final regex = RegExp(r'Console\.WriteLine\s*\((.*?)\)\s*;', dotAll: true);
-    final matches = regex.allMatches(code);
-    for (var m in matches) {
-      var content = m.group(1) ?? '';
-      if ((content.startsWith('"') && content.endsWith('"')) ||
-          (content.startsWith("'") && content.endsWith("'"))) {
-        content = content.substring(1, content.length - 1);
-      }
-      results.add(content);
-    }
-  } else if (language == 'vbnet') {
-    final regex = RegExp(r'Console\.WriteLine\s*\((.*?)\)', dotAll: true);
-    final matches = regex.allMatches(code);
-    for (var m in matches) {
-      var content = m.group(1) ?? '';
-      if ((content.startsWith('"') && content.endsWith('"')) ||
-          (content.startsWith("'") && content.endsWith("'"))) {
-        content = content.substring(1, content.length - 1);
-      }
-      results.add(content);
-    }
+      return text;
+    }).toList();
+
+    return results.isEmpty ? '⚠️ Nothing to execute.' : results.join('\n');
   }
-
-  return results.isEmpty
-      ? '⚠️ Nothing to execute or unsupported code.'
-      : results.join('\n');
-}
 
   @override
   void dispose() {
     _typingTimer?.cancel();
+    _cursorTimer?.cancel();
     _channel?.unsubscribe();
     _codeController.dispose();
     _feedbackController.dispose();
+    _codeScrollController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    const double charWidth = 8;
+    const double lineHeight = 20;
+    const int charsPerLine = 80;
+
+    if (isLoading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
     return Scaffold(
       appBar: AppBar(
-  title: const Text('CodeLiveReview'),
-  actions: [
-    // Mentee buttons
-    if (!widget.isMentor)
-      IconButton(
-        icon: isSaving
-            ? const CircularProgressIndicator(color: Colors.white)
-            : const Icon(Icons.save),
-        onPressed: _saveCode,
-      ),
-    if (!widget.isMentor)
-      IconButton(icon: const Icon(Icons.play_arrow), onPressed: _runCode),
-
-    // Mentor buttons (pwede na rin mag-save/run)
-    if (widget.isMentor)
-      IconButton(
-        icon: isSaving
-            ? const CircularProgressIndicator(color: Colors.white)
-            : const Icon(Icons.save),
-        onPressed: _saveCode,
-      ),
-    if (widget.isMentor)
-      IconButton(icon: const Icon(Icons.play_arrow), onPressed: _runCode),
-  ],
-),
-
-      body: isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                children: [
-                  DropdownButtonFormField<String>(
-                    initialValue: selectedLanguage,
-                    items: const [
-                      DropdownMenuItem(value: 'python', child: Text('Python')),
-                      DropdownMenuItem(value: 'vbnet', child: Text('VB.NET')),
-                      DropdownMenuItem(value: 'java', child: Text('Java')),
-                      DropdownMenuItem(value: 'csharp', child: Text('C#')),
-                    ],
-                    onChanged: (v) {
-                      if (v != null) {
-                        setState(() {
-                          selectedLanguage = v;
-                          _codeController.text = defaultSnippets[v] ?? '';
-                          _highlightedLines.clear();
-                          _lineComments.clear();
-                        });
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      child: TextField(
-                        controller: _codeController,
-                        maxLines: null,
-                        decoration: const InputDecoration(
-                          border: OutlineInputBorder(),
-                        ),
-                        style:
-                            const TextStyle(fontFamily: 'monospace', fontSize: 14),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                        border: Border.all(color: Colors.grey),
-                        borderRadius: BorderRadius.circular(5)),
-                    child: Text(
-                      'Output:\n$output',
-                      style:
-                          const TextStyle(fontSize: 14, color: Colors.black87),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  widget.isMentor
-                      ? TextField(
-                          controller: _feedbackController,
-                          maxLines: 4,
-                          decoration: const InputDecoration(
-                            border: OutlineInputBorder(),
-                            hintText: 'Type mentor feedback here...',
-                          ),
-                        )
-                      : Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                              border: Border.all(color: Colors.green),
-                              borderRadius: BorderRadius.circular(5)),
-                          child: Text(
-                            'Mentor Feedback:\n${_feedbackController.text}',
-                            style: const TextStyle(
-                                fontSize: 14, color: Colors.green),
-                          ),
-                        ),
-                ],
-              ),
+        title: const Text('CodeLiveReview'),
+        actions: [
+          if (canEdit)
+            IconButton(
+              icon: isSaving
+                  ? const CircularProgressIndicator(color: Colors.white)
+                  : const Icon(Icons.save),
+              onPressed: _saveCode,
             ),
+          if (canEdit)
+            IconButton(
+              icon: const Icon(Icons.play_arrow),
+              onPressed: _runCode,
+            ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: SingleChildScrollView(
+          controller: _codeScrollController,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              DropdownButtonFormField<String>(
+                initialValue: selectedLanguage,
+                items: const [
+                  DropdownMenuItem(value: 'python', child: Text('Python')),
+                  DropdownMenuItem(value: 'vbnet', child: Text('VB.NET')),
+                  DropdownMenuItem(value: 'java', child: Text('Java')),
+                  DropdownMenuItem(value: 'csharp', child: Text('C#')),
+                ],
+                onChanged: canEdit
+                    ? (v) {
+                        if (v != null) {
+                          setState(() {
+                            selectedLanguage = v;
+                            _codeController.text = defaultSnippets[v] ?? '';
+                          });
+                        }
+                      }
+                    : null,
+              ),
+              const SizedBox(height: 10),
+              Container(
+                height: 300,
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey),
+                  borderRadius: BorderRadius.circular(5),
+                ),
+                child: Stack(
+                  children: [
+                    TextField(
+                      controller: _codeController,
+                      maxLines: null,
+                      expands: true,
+                      readOnly: !canEdit,
+                      decoration: const InputDecoration(
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.all(8),
+                      ),
+                      style:
+                          const TextStyle(fontFamily: 'monospace', fontSize: 14),
+                    ),
+                    if (_otherUserCursor != null &&
+                        _otherUserCursor! <= _codeController.text.length)
+                      AnimatedPositioned(
+                        duration: const Duration(milliseconds: 150),
+                        left: (_otherUserCursor! % charsPerLine) * charWidth,
+                        top: (_otherUserCursor! ~/ charsPerLine) * lineHeight,
+                        child: Container(
+                          width: 2,
+                          height: lineHeight,
+                          color: Colors.red,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey),
+                  borderRadius: BorderRadius.circular(5),
+                ),
+                child: Text('Output:\n$output'),
+              ),
+              const SizedBox(height: 10),
+              if (_isMentorCurrentUser())
+                TextField(
+                  controller: _feedbackController,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    hintText: 'Type mentor feedback here...',
+                  ),
+                )
+              else
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.green),
+                    borderRadius: BorderRadius.circular(5),
+                    color: _feedbackBg,
+                  ),
+                  child: Text(
+                    'Mentor Feedback:\n${_feedbackController.text}',
+                    style: const TextStyle(color: Colors.green),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

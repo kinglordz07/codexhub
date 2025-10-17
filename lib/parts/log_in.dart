@@ -15,9 +15,10 @@ class SignIn extends StatefulWidget {
 class _SignInState extends State<SignIn> {
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
-
   final AuthService _authService = AuthService();
+
   bool _isLoading = false;
+  bool _obscurePassword = true;
 
   @override
   void dispose() {
@@ -44,10 +45,7 @@ class _SignInState extends State<SignIn> {
     _safeSetState(() => _isLoading = true);
 
     try {
-      final result = await _authService.signIn(
-        email: email,
-        password: password,
-      );
+      final result = await _authService.signIn(email: email, password: password);
 
       if (result['success'] != true) {
         _showError(result['error'] ?? "Login failed.");
@@ -56,7 +54,6 @@ class _SignInState extends State<SignIn> {
 
       final role = result['role'] ?? 'user';
 
-      // Navigate based on role
       if (!mounted) return;
       if (role == 'mentor') {
         Navigator.pushReplacement(
@@ -79,7 +76,10 @@ class _SignInState extends State<SignIn> {
   void _showError(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("❌ $message"), backgroundColor: Colors.red),
+      SnackBar(
+        content: Text("❌ $message"),
+        backgroundColor: Theme.of(context).colorScheme.error,
+      ),
     );
   }
 
@@ -96,7 +96,7 @@ class _SignInState extends State<SignIn> {
         child: Text(
           'Forgot Password?',
           style: TextStyle(
-            color: Colors.blue.shade700,
+            color: Theme.of(context).colorScheme.primary,
             fontWeight: FontWeight.w600,
             decoration: TextDecoration.underline,
           ),
@@ -107,17 +107,20 @@ class _SignInState extends State<SignIn> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: Center(
         child: Container(
           width: 360,
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: isDark ? Colors.grey[850] : Colors.white,
             borderRadius: BorderRadius.circular(12),
             boxShadow: [
               BoxShadow(
-                color: Colors.black12,
+                color: isDark ? Colors.black45 : Colors.black12,
                 blurRadius: 12,
                 offset: const Offset(0, 6),
               ),
@@ -126,18 +129,27 @@ class _SignInState extends State<SignIn> {
           child: SingleChildScrollView(
             child: Column(
               children: [
-                const Text(
+                Text(
                   "Log In",
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
                 ),
                 const SizedBox(height: 28),
 
                 // Email
                 TextFormField(
                   controller: _emailController,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: "Email",
-                    prefixIcon: Icon(Icons.email_outlined),
+                    prefixIcon: const Icon(Icons.email_outlined),
+                    filled: true,
+                    fillColor: isDark ? Colors.grey[800] : Colors.grey[100],
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide.none,
+                    ),
                   ),
                   keyboardType: TextInputType.emailAddress,
                 ),
@@ -146,11 +158,26 @@ class _SignInState extends State<SignIn> {
                 // Password
                 TextFormField(
                   controller: _passwordController,
-                  decoration: const InputDecoration(
+                  obscureText: _obscurePassword,
+                  decoration: InputDecoration(
                     labelText: "Password",
-                    prefixIcon: Icon(Icons.lock_outline),
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    filled: true,
+                    fillColor: isDark ? Colors.grey[800] : Colors.grey[100],
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide.none,
+                    ),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      onPressed: () => _safeSetState(() {
+                        _obscurePassword = !_obscurePassword;
+                      }),
+                    ),
                   ),
-                  obscureText: true,
                 ),
                 const SizedBox(height: 12),
 
@@ -162,19 +189,22 @@ class _SignInState extends State<SignIn> {
                 SizedBox(
                   width: double.infinity,
                   height: 50,
-                  child:
-                      _isLoading
-                          ? const Center(child: CircularProgressIndicator())
-                          : ElevatedButton(
-                            onPressed: _signIn,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.blue,
-                            ),
-                            child: const Text(
-                              "Log In",
-                              style: TextStyle(fontSize: 16),
+                  child: _isLoading
+                      ? const Center(child: CircularProgressIndicator())
+                      : ElevatedButton(
+                          onPressed: _signIn,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Theme.of(context).colorScheme.primary,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
                             ),
                           ),
+                          child: const Text(
+                            "Log In",
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                          ),
+                        ),
                 ),
                 const SizedBox(height: 20),
 
@@ -182,14 +212,22 @@ class _SignInState extends State<SignIn> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Text("Don't have an account?"),
+                    Text(
+                      "Don't have an account?",
+                      style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
+                    ),
                     TextButton(
-                      onPressed:
-                          () => Navigator.pushReplacement(
-                            context,
-                            MaterialPageRoute(builder: (_) => const SignUp()),
-                          ),
-                      child: const Text("Sign Up"),
+                      onPressed: () => Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute(builder: (_) => const SignUp()),
+                      ),
+                      child: Text(
+                        "Sign Up",
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
                   ],
                 ),

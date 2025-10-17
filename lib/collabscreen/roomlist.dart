@@ -1,6 +1,6 @@
+import 'package:codexhub01/collabscreen/collab_room_tabs.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:codexhub01/collabscreen/room.dart';
 
 class RoomListScreen extends StatefulWidget {
   const RoomListScreen({super.key});
@@ -41,53 +41,59 @@ class _RoomListScreenState extends State<RoomListScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("Collaboration Rooms")),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView.builder(
-              itemCount: _rooms.length,
-              itemBuilder: (context, index) {
-                final room = _rooms[index];
-                return ListTile(
-                  title: Text(room['name']),
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder:
-                            (_) => CollabRoomScreen(
-                              roomId: room['id'],
-                              roomName: room['name'],
-                            ),
+Widget build(BuildContext context) {
+  return Scaffold(
+    appBar: AppBar(title: const Text("Collaboration Rooms")),
+    body: Column(
+      children: [
+        Expanded(
+          child: ListView.builder(
+            itemCount: _rooms.length,
+            itemBuilder: (context, index) {
+              final room = _rooms[index];
+              return ListTile(
+                title: Text(room['name']),
+                onTap: () {
+                  final currentUserId = supabase.auth.currentUser?.id ?? '';
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => CollabRoomTabs(
+                        roomId: room['id'],
+                        roomName: room['name'],
+                        menteeId: currentUserId,
+                        mentorId: '', // puwede i-fetch from live_sessions kung may mentor na
+                        isMentor: false,
                       ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _roomController,
-                    decoration: const InputDecoration(
-                      labelText: "New Room",
-                      border: OutlineInputBorder(),
                     ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _roomController,
+                  decoration: const InputDecoration(
+                    labelText: "New Room",
+                    border: OutlineInputBorder(),
                   ),
                 ),
-                IconButton(icon: const Icon(Icons.add), onPressed: _createRoom),
-              ],
-            ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.add),
+                onPressed: _createRoom,
+              ),
+            ],
           ),
-        ],
-      ),
-    );
-  }
+        ),
+      ],
+    ),
+  );
+}
 }

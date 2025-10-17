@@ -31,6 +31,34 @@ class SessionService {
     });
   }
 
+  /// 🔹 Fetch all sessions for the current mentee
+  Future<List<Map<String, dynamic>>> getUserSessions() async {
+  final userId = currentUserId;
+  if (userId == null) return [];
+
+  final response = await _supabase
+      .from('mentor_sessions')
+      .select('''
+        id,
+        session_type,
+        session_date,
+        session_time,
+        notes,
+        status,
+        mentor:profiles!mentor_sessions_mentor_id_fkey(username)
+      ''')
+      .eq('user_id', userId)
+      .order('session_date', ascending: true);
+
+  // Map mentor username into mentor_name field
+  return List<Map<String, dynamic>>.from(
+    response.map((s) => {
+      ...s,
+      'mentor_name': s['mentor']?['username'] ?? 'Unknown',
+    }),
+  );
+}
+
   /// Mentor gets all sessions assigned to them (with student username)
   Future<List<Map<String, dynamic>>> getMentorSessions() async {
     final mentorId = currentUserId;
