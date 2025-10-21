@@ -57,7 +57,7 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
         mentorId = session['mentor_id'] ?? '';
         menteeId = session['mentee_id'] ?? '';
       }
-
+      if (!mounted) return;
       Navigator.push(
         context,
         MaterialPageRoute(

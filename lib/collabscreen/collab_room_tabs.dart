@@ -9,8 +9,8 @@ import 'room.dart';
 class CollabRoomTabs extends StatefulWidget {
   final String roomId;
   final String roomName;
-  final String menteeId; // initial creator/mentee who created the room
-  final String mentorId; // may be empty string if none
+  final String menteeId; // initial creator
+  final String mentorId; // may be empty
   final bool isMentor;
 
   const CollabRoomTabs({
@@ -26,15 +26,14 @@ class CollabRoomTabs extends StatefulWidget {
   State<CollabRoomTabs> createState() => _CollabRoomTabsState();
 }
 
-class _CollabRoomTabsState extends State<CollabRoomTabs>
-    with TickerProviderStateMixin {
+class _CollabRoomTabsState extends State<CollabRoomTabs> with TickerProviderStateMixin {
   late TabController _tabController;
   final SupabaseClient supabase = Supabase.instance.client;
 
   String? currentUserId;
   String? mentorId;
   String? liveSessionId;
-  String? currentMenteeId; // the mentee (creator) tracked from live_sessions
+  String? currentMenteeId;
   bool isViewer = false;
   StreamSubscription<List<Map<String, dynamic>>>? _subscriptionListener;
 
@@ -55,13 +54,10 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
   Future<void> _initUserAndListen() async {
     currentUserId = supabase.auth.currentUser?.id;
 
-    if (widget.roomId.isEmpty) {
-      debugPrint("❌ Error: roomId is empty.");
-      return;
-    }
+    if (widget.roomId.isEmpty) return debugPrint("❌ Error: roomId is empty.");
 
     try {
-      // load current live_session for this room (if exists)
+      // Load or create live session
       final session = await supabase
           .from('live_sessions')
           .select()
@@ -73,7 +69,6 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
         mentorId = session['mentor_id'] as String?;
         currentMenteeId = session['mentee_id'] as String?;
       } else {
-        // ensure there is a live_sessions row for this room — create lightweight row if absent
         final created = await supabase.from('live_sessions').insert({
           'room_id': widget.roomId,
           'mentee_id': widget.menteeId,
@@ -83,6 +78,7 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
           'waiting': false,
           'language': 'python',
         }).select().maybeSingle();
+
         if (created != null) {
           liveSessionId = created['id'] as String?;
           mentorId = created['mentor_id'] as String?;
@@ -90,10 +86,9 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
         }
       }
 
-      // Determine viewer status quickly (if user is member but not mentor/mentee)
       await _checkIfViewer();
 
-      // Subscribe to realtime changes for live_sessions of this room (so code tab updates immediately)
+      // Realtime subscription for live_sessions
       _subscriptionListener = supabase
           .from('live_sessions')
           .stream(primaryKey: ['id'])
@@ -113,138 +108,57 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     }
   }
 
-  /// Returns true if current user is the mentee/creator for this session
-  bool get _amMentee =>
-      currentUserId != null && currentMenteeId != null && currentUserId == currentMenteeId;
-
+  bool get _amMentee => currentUserId != null && currentMenteeId != null && currentUserId == currentMenteeId;
   bool get _amMentor => currentUserId != null && mentorId != null && currentUserId == mentorId;
-
-  /// Editing allowed only for mentee (creator) and mentor
   bool get canEdit => _amMentee || _amMentor;
 
-  /// Check if current user exists in room_members but is not mentor/mentee => viewer
   Future<void> _checkIfViewer() async {
     try {
       final response = await supabase
           .from('room_members')
-          .select('user_id, role')
+          .select('user_id')
           .eq('room_id', widget.roomId);
 
       final members = List<Map<String, dynamic>>.from(response);
       final isMember = members.any((m) => m['user_id'] == currentUserId);
-
-      if (isMember && !_amMentee && !_amMentor) {
-        setState(() => isViewer = true);
-      } else {
-        setState(() => isViewer = false);
-      }
+      setState(() => isViewer = isMember && !_amMentee && !_amMentor);
     } catch (e) {
       debugPrint("⚠️ Error checking room membership: $e");
     }
   }
 
-  // ===========================
-  // Invite logic + Auto-kick
-  // ===========================
-  /// Called when the creator (mentee) tries to invite a mentor.
-  /// If there's an active session and the same mentee tries to invite again -> auto-kick the mentee
+  /// =============================
+  /// Invite Mentor by User ID
+  /// =============================
   Future<void> inviteMentor(String targetMentorId) async {
-    if (currentUserId == null) return;
-    // Only the current mentee (creator) can invite a mentor
-    if (!_amMentee) {
+    if (currentUserId == null || !_amMentee) {
       _showSnack('Only the room creator (mentee) can invite a mentor.');
       return;
     }
 
     try {
-      // fetch the live session again to have authoritative state
       final session = await supabase
           .from('live_sessions')
           .select()
           .eq('room_id', widget.roomId)
           .maybeSingle();
 
-      if (session == null) {
-        _showSnack('No live session found for this room.');
-        return;
-      }
+      if (session == null) return _showSnack('No live session found.');
 
-      final bool isLive = session['is_live'] as bool? ?? false;
-      final String sessionMenteeId = session['mentee_id'] as String? ?? '';
+      final isLive = session['is_live'] as bool? ?? false;
+      final sessionMenteeId = session['mentee_id'] as String? ?? '';
 
-      // If the session is live and the creator tries to invite again -> auto-kick the creator (themself)
       if (isLive && sessionMenteeId == currentUserId) {
-        debugPrint('⚠️ Creator attempted to re-invite while session active — auto-kicking creator.');
-
-        // 1) remove creator from room_members
-        if (currentUserId != null) {
-  final delResp = await supabase
-      .from('room_members')
-      .delete()
-      .eq('room_id', widget.roomId)
-      .eq('user_id', currentUserId!);
-
-  debugPrint('🗑️ Removed creator from room_members: $delResp');
-} else {
-  debugPrint('⚠️ currentUserId is null, skipping room member deletion.');
-}
-        // 2) find remaining members (excluding kicked creator)
-        final remResp = await supabase
-            .from('room_members')
-            .select('user_id')
-            .eq('room_id', widget.roomId);
-
-        final remaining = List<Map<String, dynamic>>.from(remResp);
-        if (remaining.isNotEmpty) {
-          // pick random member to become new creator/mentee
-          final rnd = Random();
-          final choice = remaining[rnd.nextInt(remaining.length)];
-          final newCreatorId = choice['user_id'] as String;
-
-          // update rooms.creator_id
-          await supabase
-              .from('rooms')
-              .update({'creator_id': newCreatorId})
-              .eq('id', widget.roomId);
-
-          // transfer mentee role in live_sessions to newCreatorId
-          await supabase
-              .from('live_sessions')
-              .update({'mentee_id': newCreatorId, 'is_live': false})
-              .eq('room_id', widget.roomId);
-
-          debugPrint('🔁 Transferred room creator to $newCreatorId and set session inactive.');
-          _showSnack('You were removed. Room ownership transferred to another member.');
-        } else {
-          // no members left -> delete everything related to room
-          debugPrint('💀 No remaining members — deleting room and session.');
-
-          // delete live_sessions row(s)
-          await supabase.from('live_sessions').delete().eq('room_id', widget.roomId);
-          // delete room_members (should be none)
-          await supabase.from('room_members').delete().eq('room_id', widget.roomId);
-          // delete room
-          await supabase.from('rooms').delete().eq('id', widget.roomId);
-
-          _showSnack('You were removed. Room was deleted because it is empty.');
-        }
-
-        // after auto-kick, leave the screen or refresh state
-        // here we refresh local state
-        await _initUserAndListen();
+        await _autoKickCreator();
         return;
       }
 
-      // If not live or mentee different, proceed normally: assign mentor and mark session live
-      final updateResp = await supabase
+      await supabase
           .from('live_sessions')
           .update({'mentor_id': targetMentorId, 'is_live': true, 'last_editor': currentUserId})
           .eq('room_id', widget.roomId);
 
-      debugPrint('✅ Invite processed, session updated: $updateResp');
       _showSnack('Mentor invited — session is now live.');
-
-      // refresh state
       await _initUserAndListen();
     } catch (e, st) {
       debugPrint('❌ Error inviting mentor: $e\n$st');
@@ -252,17 +166,75 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     }
   }
 
-  // Utility: show quick snackbar
-  void _showSnack(String text) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  Future<void> _autoKickCreator() async {
+  if (currentUserId == null) return;
+
+  // Remove current user from room_members
+  await supabase
+      .from('room_members')
+      .delete()
+      .eq('room_id', widget.roomId)
+      .eq('user_id', currentUserId!);
+
+  // Fetch remaining members
+  final remainingResp = await supabase
+      .from('room_members')
+      .select('user_id')
+      .eq('room_id', widget.roomId);
+
+  final remaining = (remainingResp as List<dynamic>)
+      .map((e) => e as Map<String, dynamic>)
+      .toList();
+
+  if (remaining.isNotEmpty) {
+    // Pick a random member as the new creator
+    final rnd = Random();
+    final choice = remaining[rnd.nextInt(remaining.length)];
+    final newCreatorId = choice['user_id'] as String;
+
+    // Update rooms.creator_id
+    await supabase
+        .from('rooms')
+        .update({'creator_id': newCreatorId})
+        .eq('id', widget.roomId);
+
+    // Update live_sessions. Mentee changes to new creator
+    await supabase
+        .from('live_sessions')
+        .update({'mentee_id': newCreatorId, 'is_live': false})
+        .eq('room_id', widget.roomId);
+
+    _showSnack('You were removed. Room ownership transferred.');
+  } else {
+    // No members left — delete everything
+    await supabase.from('live_sessions').delete().eq('room_id', widget.roomId);
+    await supabase.from('room_members').delete().eq('room_id', widget.roomId);
+    await supabase.from('rooms').delete().eq('id', widget.roomId);
+
+    _showSnack('You were removed. Room was deleted.');
   }
 
-  // Exposed action: allow a mentor to accept invitation (optional)
+  // Refresh local state
+  await _initUserAndListen();
+}
+  /// =============================
+  /// Invite Mentor by Username
+  /// =============================
+  Future<void> inviteMentorByUsername(String username) async {
+    try {
+      final userResp = await supabase.from('users').select('id').eq('username', username).maybeSingle();
+      final targetMentorId = userResp?['id'] as String?;
+      if (targetMentorId == null) return _showSnack('User not found.');
+      await inviteMentor(targetMentorId);
+    } catch (e) {
+      debugPrint('❌ Error inviting mentor by username: $e');
+      _showSnack('Failed to invite mentor.');
+    }
+  }
+
   Future<void> acceptInviteAsMentor() async {
     if (currentUserId == null) return;
     try {
-      // mark mentor as accepted by setting mentor_id in live_sessions (if not already)
       await supabase
           .from('live_sessions')
           .update({'mentor_id': currentUserId, 'is_live': true, 'last_editor': currentUserId})
@@ -276,17 +248,10 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     }
   }
 
-  // Optional: allow mentor to leave (clears mentor_id and sets is_live false)
   Future<void> mentorLeave() async {
-    if (currentUserId == null) return;
-    if (!_amMentor) return;
-
+    if (!_amMentor || currentUserId == null) return;
     try {
-      await supabase
-          .from('live_sessions')
-          .update({'mentor_id': null, 'is_live': false})
-          .eq('room_id', widget.roomId);
-
+      await supabase.from('live_sessions').update({'mentor_id': null, 'is_live': false}).eq('room_id', widget.roomId);
       _showSnack('You left the mentoring session.');
       await _initUserAndListen();
     } catch (e) {
@@ -294,12 +259,14 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     }
   }
 
-  // ===========================
-  // UI
-  // ===========================
+  void _showSnack(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+
   @override
   Widget build(BuildContext context) {
-    // re-evaluate viewer state every build (lightweight)
     _checkIfViewer();
 
     return Scaffold(
@@ -313,21 +280,6 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
           ],
         ),
         actions: [
-          // if current user is creator (mentee), show "Invite Mentor" button for demo/testing
-          if (_amMentee)
-            IconButton(
-              icon: const Icon(Icons.person_add),
-              tooltip: 'Invite Mentor (test)',
-              onPressed: () async {
-                // For demo purposes: prompt input for mentor id
-                final id = await _promptForId(context, 'Enter mentor user id to invite');
-                if (id != null && id.isNotEmpty) {
-                  await inviteMentor(id.trim());
-                }
-              },
-            ),
-
-          // if current user is mentor and is in session, offer leave action
           if (_amMentor)
             IconButton(
               icon: const Icon(Icons.exit_to_app),
@@ -339,51 +291,17 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
       body: TabBarView(
         controller: _tabController,
         children: [
-          // Chat tab (you already have CollabRoomScreen)
           CollabRoomScreen(
             roomId: widget.roomId,
             roomName: widget.roomName,
             isMentor: widget.isMentor,
           ),
-
-          // Code editor always visible. Editing allowed only for mentee & mentor.
           CollabCodeEditorScreen(
             roomId: widget.roomId,
             isReadOnly: !canEdit,
             isMentor: _amMentor,
             liveSessionId: liveSessionId ?? '',
           ),
-        ],
-      ),
-      floatingActionButton: _amMentee
-          ? FloatingActionButton.extended(
-              label: const Text('Invite Mentor'),
-              icon: const Icon(Icons.person_add),
-              onPressed: () async {
-                final id = await _promptForId(context, 'Enter mentor user id to invite');
-                if (id != null && id.isNotEmpty) {
-                  await inviteMentor(id.trim());
-                }
-              },
-            )
-          : null,
-    );
-  }
-
-  // simple helper to ask for mentor id (for demo/testing)
-  Future<String?> _promptForId(BuildContext ctx, String title) {
-    final controller = TextEditingController();
-    return showDialog<String>(
-      context: ctx,
-      builder: (dctx) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(hintText: 'user id (uuid)'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(dctx).pop(null), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.of(dctx).pop(controller.text), child: const Text('OK')),
         ],
       ),
     );

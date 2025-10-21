@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:codexhub01/parts/create_live_lobby.dart';
 import 'package:codexhub01/reusable_widgets/SessionsTabScreen.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -164,6 +165,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       'title': 'Collaboration Lobby',
       'icon': Icons.group_work,
       'route': CollabLobbyScreen(),
+    },
+    {
+      'title': 'Create Lobby',
+      'icon': Icons.add_circle,
+      'route': CreateLiveLobby(menteeId: '', menteeName: '', isMentor: true,),
     },
     {
       'title': 'Friend List',

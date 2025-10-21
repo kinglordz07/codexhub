@@ -45,6 +45,8 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen> {
   RealtimeChannel? _channel;
   Color _feedbackBg = Colors.transparent;
 
+  String? _lastLocalCode;
+
   final Map<String, String> defaultSnippets = {
     'python': 'print("Hello, World!")',
     'vbnet': '''
@@ -84,48 +86,49 @@ class Program {
   }
 
   Future<void> _loadSession() async {
-  try {
-    _currentUserId = supabase.auth.currentUser?.id;
+    try {
+      _currentUserId = supabase.auth.currentUser?.id;
 
-    // Kunin ang existing session para sa room
-    final session = await supabase
-        .from('live_sessions')
-        .select()
-        .eq('room_id', widget.roomId)
-        .maybeSingle();
+      final session = await supabase
+          .from('live_sessions')
+          .select()
+          .eq('room_id', widget.roomId)
+          .maybeSingle();
 
-    if (session != null) {
-      _mentorId = session['mentor_id'];
-      _menteeId = session['mentee_id'];
-      selectedLanguage = session['language'] ?? 'python';
+      if (session != null) {
+        _mentorId = session['mentor_id'];
+        _menteeId = session['mentee_id'];
+        selectedLanguage = session['language'] ?? 'python';
 
-      // Para sa viewers at editors pareho, set the code + output
-      _codeController.text = session['code'] ?? defaultSnippets[selectedLanguage]!;
-      output = session['output'] ?? '';
-      _feedbackController.text = session['mentor_feedback'] ?? '';
+        _codeController.text =
+            session['code'] ?? defaultSnippets[selectedLanguage]!;
+        _lastLocalCode = _codeController.text;
 
-      // Edit permission lang sa mentor/mentee
-      canEdit = (_currentUserId == _mentorId || _currentUserId == _menteeId);
-    } else {
-      // Kung walang session, gumawa ng bagong session (auto editor)
-      final newSession = await supabase.from('live_sessions').insert({
-        'room_id': widget.roomId,
-        'language': selectedLanguage,
-        'code': defaultSnippets[selectedLanguage] ?? '',
-        'is_live': true,
-        'waiting': false,
-      }).select().maybeSingle();
+        output = session['output'] ?? '';
+        _feedbackController.text = session['mentor_feedback'] ?? '';
 
-      _codeController.text = newSession?['code'] ?? '';
-      output = newSession?['output'] ?? '';
-      canEdit = true; // gumawa ng bagong session, creator can edit
+        canEdit = (_currentUserId == _mentorId || _currentUserId == _menteeId);
+      } else {
+        final newSession = await supabase.from('live_sessions').insert({
+          'room_id': widget.roomId,
+          'language': selectedLanguage,
+          'code': defaultSnippets[selectedLanguage] ?? '',
+          'is_live': true,
+          'waiting': false,
+        }).select().maybeSingle();
+
+        _codeController.text = newSession?['code'] ?? '';
+        _lastLocalCode = _codeController.text;
+
+        output = newSession?['output'] ?? '';
+        canEdit = true;
+      }
+    } catch (e) {
+      debugPrint('❌ Error loading session: $e');
+    } finally {
+      if (mounted) setState(() => isLoading = false);
     }
-  } catch (e) {
-    debugPrint('❌ Error loading session: $e');
-  } finally {
-    if (mounted) setState(() => isLoading = false);
   }
-}
 
   void _setupListeners() {
     _codeController.addListener(() {
@@ -133,6 +136,7 @@ class Program {
       _isLocalEdit = true;
 
       _restartTypingTimer(() async {
+        _lastLocalCode = _codeController.text;
         await _updateLiveField('code', _codeController.text);
         _isLocalEdit = false;
       });
@@ -154,57 +158,74 @@ class Program {
   }
 
   void _subscribeRealtime() {
-  final channelName = 'live_sessions:${widget.roomId}';
+    final channelName = 'live_sessions:${widget.roomId}';
 
-  _channel = supabase.channel(channelName)
-    ..onPostgresChanges(
-      event: PostgresChangeEvent.update,
-      schema: 'public',
-      table: 'live_sessions',
-      filter: PostgresChangeFilter(
-        type: PostgresChangeFilterType.eq,
-        column: 'room_id',
-        value: widget.roomId,
-      ),
-      callback: (payload) {
-        if (!mounted) return;
-        final newData = payload.newRecord;
-        if (newData.isEmpty) return;
+    _channel = supabase.channel(channelName)
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.update,
+        schema: 'public',
+        table: 'live_sessions',
+        filter: PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq,
+          column: 'room_id',
+          value: widget.roomId,
+        ),
+        callback: (payload) {
+          if (!mounted) return;
+          final newData = payload.newRecord;
+          if (newData.isEmpty) return;
 
-        // Viewer lang, di kailangan i-block
-        if (_isLocalEdit && canEdit) return;
+          // Viewer-only updates
+          if (_isLocalEdit && canEdit) return;
 
-        setState(() {
-          final remoteCode = newData['code'];
-          if (remoteCode != null && remoteCode != _codeController.text) {
-            final oldSel = _codeController.selection;
-            _codeController.text = remoteCode;
-            final offset = oldSel.baseOffset.clamp(0, _codeController.text.length);
-            _codeController.selection = TextSelection.collapsed(offset: offset);
-          }
+          setState(() {
+            // Smooth code update
+            final remoteCode = newData['code'];
+            if (remoteCode != null &&
+                remoteCode != _codeController.text &&
+                remoteCode != _lastLocalCode) {
+              final cursorOffset = _codeController.selection.baseOffset;
+              final scrollOffset = _codeScrollController.offset;
 
-          if (newData['mentor_feedback'] != null) {
-            _feedbackController.text = newData['mentor_feedback'];
-          }
+             _codeController.value = TextEditingValue(
+  text: remoteCode,
+  selection: TextSelection.collapsed(
+    offset: cursorOffset.clamp(0, remoteCode.length).toInt(),
+  ),
+);
 
-          final otherCursorField = (_currentUserId == _mentorId) ? 'mentee_cursor' : 'mentor_cursor';
-          _otherUserCursor = newData[otherCursorField];
 
-          output = newData['output'] ?? output;
-        });
-      },
-    )
-    ..subscribe((RealtimeSubscribeStatus status, [Object? error]) {
-      debugPrint('🔔 Channel $channelName → $status');
-      if (error != null) debugPrint('⚠️ Channel error: $error');
+              _lastLocalCode = remoteCode;
 
-      if (status == RealtimeSubscribeStatus.closed) {
-        Future.delayed(const Duration(seconds: 2), _subscribeRealtime);
-      }
-    });
+              if (_codeScrollController.hasClients) {
+                _codeScrollController.jumpTo(scrollOffset);
+              }
+            }
 
-  debugPrint('✅ Subscribed to live room: ${widget.roomId}');
-}
+            if (newData['mentor_feedback'] != null &&
+                newData['mentor_feedback'] != _feedbackController.text) {
+              _feedbackController.text = newData['mentor_feedback'];
+            }
+
+            final otherCursorField =
+                (_currentUserId == _mentorId) ? 'mentee_cursor' : 'mentor_cursor';
+            _otherUserCursor = newData[otherCursorField];
+
+            output = newData['output'] ?? output;
+          });
+        },
+      )
+      ..subscribe((RealtimeSubscribeStatus status, [Object? error]) {
+        debugPrint('🔔 Channel $channelName → $status');
+        if (error != null) debugPrint('⚠️ Channel error: $error');
+
+        if (status == RealtimeSubscribeStatus.closed) {
+          Future.delayed(const Duration(seconds: 2), _subscribeRealtime);
+        }
+      });
+
+    debugPrint('✅ Subscribed to live room: ${widget.roomId}');
+  }
 
   Future<void> _updateLiveField(String field, dynamic value) async {
     try {
@@ -346,6 +367,7 @@ class Program {
                           setState(() {
                             selectedLanguage = v;
                             _codeController.text = defaultSnippets[v] ?? '';
+                            _lastLocalCode = _codeController.text;
                           });
                         }
                       }
@@ -375,7 +397,7 @@ class Program {
                     if (_otherUserCursor != null &&
                         _otherUserCursor! <= _codeController.text.length)
                       AnimatedPositioned(
-                        duration: const Duration(milliseconds: 150),
+                        duration: const Duration(milliseconds: 100),
                         left: (_otherUserCursor! % charsPerLine) * charWidth,
                         top: (_otherUserCursor! ~/ charsPerLine) * lineHeight,
                         child: Container(

@@ -58,6 +58,9 @@ dependencies:
   zego_zim: ^2.21.1+2
   postgrest: ^2.5.0
   uuid: ^4.5.1
+  open_filex: ^4.7.0
+  permission_handler: ^12.0.1
+  file_picker: ^10.3.3
 
 dev_dependencies:
   flutter_test:
