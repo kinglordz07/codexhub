@@ -35,6 +35,8 @@ class _SessionsTabScreenState extends State<SessionsTabScreen>
         backgroundColor: Colors.indigo,
         bottom: TabBar(
           controller: _tabController,
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.lightBlueAccent,
           tabs: const [
             Tab(text: "Schedule Session"),
             Tab(text: "My Sessions"),

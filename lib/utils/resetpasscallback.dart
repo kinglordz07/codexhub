@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:codexhub01/parts/newpass.dart';
+import 'package:codexhub01/utils/newpass.dart';
 
 class ResetPasswordCallback extends StatefulWidget {
   const ResetPasswordCallback({super.key});
@@ -17,8 +16,8 @@ class _ResetPasswordCallbackState extends State<ResetPasswordCallback> {
   @override
   void initState() {
     super.initState();
-    // Wait until context is available
-    Future.delayed(Duration.zero, _handleResetCallback);
+    // Schedule the callback after the first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) => _handleResetCallback());
   }
 
   Future<void> _handleResetCallback() async {
@@ -26,46 +25,40 @@ class _ResetPasswordCallbackState extends State<ResetPasswordCallback> {
       final route = ModalRoute.of(context);
       if (route == null) throw Exception('No route found');
 
-      final settings = route.settings;
-      if (settings.arguments == null) throw Exception('No arguments found');
-      if (settings.arguments is! Uri) {
-        throw Exception('Arguments are not a Uri');
-      }
+      final args = route.settings.arguments;
+      if (args == null) throw Exception('No arguments provided');
+      if (args is! Uri) throw Exception('Arguments must be a Uri');
 
-      final Uri deepLink = settings.arguments as Uri;
+      final Uri deepLink = args;
       final String? token = deepLink.queryParameters['token'];
       if (token == null || token.isEmpty) throw Exception('Invalid reset link');
 
-      // Complete password recovery
-      await Supabase.instance.client.auth.updateUser(
-        UserAttributes(password: ''), // Will be updated in the next screen
-      );
-
+      // Navigate to the UpdatePasswordScreen with token
       if (!mounted) return;
-
-      // Open UpdatePasswordScreen
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (context) => UpdatePasswordScreen()),
+        MaterialPageRoute(
+          builder: (_) => UpdatePasswordScreen(token: token),
+        ),
       );
     } on TimeoutException {
-      if (!mounted) return;
-      setState(() {
-        _error = 'Request timed out. Please try again.';
-        _isLoading = false;
-      });
-    } catch (e, stackTrace) {
+      _setError('Request timed out. Please try again.');
+    } catch (e, st) {
       debugPrint('Reset error: $e');
-      debugPrint('Stack trace: $stackTrace');
-      if (!mounted) return;
-      setState(() {
-        _error = 'Error: ${e.toString()}';
-        _isLoading = false;
-      });
+      debugPrint('Stack trace: $st');
+      _setError('Error: $e');
     }
   }
 
-  void _retryResetCallback() {
+  void _setError(String message) {
+    if (!mounted) return;
+    setState(() {
+      _error = message;
+      _isLoading = false;
+    });
+  }
+
+  void _retry() {
     setState(() {
       _isLoading = true;
       _error = null;
@@ -84,33 +77,32 @@ class _ResetPasswordCallbackState extends State<ResetPasswordCallback> {
         ),
       ),
       body: Center(
-        child:
-            _isLoading
-                ? const CircularProgressIndicator()
-                : Padding(
-                  padding: const EdgeInsets.all(20.0),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        _error ?? 'An unknown error occurred',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(fontSize: 16),
-                      ),
-                      const SizedBox(height: 20),
-                      if (_error != null)
-                        ElevatedButton(
-                          onPressed: _retryResetCallback,
-                          child: const Text('Try Again'),
-                        ),
-                      const SizedBox(height: 10),
+        child: _isLoading
+            ? const CircularProgressIndicator()
+            : Padding(
+                padding: const EdgeInsets.all(20.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      _error ?? 'An unknown error occurred',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 16),
+                    ),
+                    const SizedBox(height: 20),
+                    if (_error != null)
                       ElevatedButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Go Back'),
+                        onPressed: _retry,
+                        child: const Text('Try Again'),
                       ),
-                    ],
-                  ),
+                    const SizedBox(height: 10),
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Go Back'),
+                    ),
+                  ],
                 ),
+              ),
       ),
     );
   }

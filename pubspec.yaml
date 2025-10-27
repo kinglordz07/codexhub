@@ -61,6 +61,8 @@ dependencies:
   open_filex: ^4.7.0
   permission_handler: ^12.0.1
   file_picker: ^10.3.3
+  url_launcher: ^6.3.2
+  app_links: ^6.4.1
 
 dev_dependencies:
   flutter_test:

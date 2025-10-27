@@ -11,8 +11,27 @@ class RoomListScreen extends StatefulWidget {
 
 class _RoomListScreenState extends State<RoomListScreen> {
   final SupabaseClient supabase = Supabase.instance.client;
-  List<Map<String, dynamic>> _rooms = [];
   final TextEditingController _roomController = TextEditingController();
+  
+  List<Map<String, dynamic>> _rooms = [];
+  bool _isLoading = true;
+  bool _isCreatingRoom = false;
+
+  // Responsive layout detection
+  bool get isSmallScreen {
+    final mediaQuery = MediaQuery.of(context);
+    return mediaQuery.size.width < 600;
+  }
+
+  bool get isMediumScreen {
+    final mediaQuery = MediaQuery.of(context);
+    return mediaQuery.size.width >= 600 && mediaQuery.size.width < 1024;
+  }
+
+  bool get isLargeScreen {
+    final mediaQuery = MediaQuery.of(context);
+    return mediaQuery.size.width >= 1024;
+  }
 
   @override
   void initState() {
@@ -21,79 +40,321 @@ class _RoomListScreenState extends State<RoomListScreen> {
   }
 
   Future<void> _loadRooms() async {
-    final response = await supabase.from('rooms').select().order('created_at');
-    setState(() {
-      _rooms = List<Map<String, dynamic>>.from(response);
-    });
+    try {
+      setState(() => _isLoading = true);
+      final response = await supabase
+          .from('rooms')
+          .select()
+          .order('created_at', ascending: false);
+      
+      if (mounted) {
+        setState(() {
+          _rooms = List<Map<String, dynamic>>.from(response);
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        _showError('Failed to load rooms: $e');
+      }
+    }
   }
 
   Future<void> _createRoom() async {
     final user = supabase.auth.currentUser;
-    if (user == null || _roomController.text.trim().isEmpty) return;
+    if (user == null) {
+      _showError('Please sign in to create a room');
+      return;
+    }
 
-    await supabase.from('rooms').insert({
-      'name': _roomController.text.trim(),
-      'created_by': user.id,
-    });
+    final roomName = _roomController.text.trim();
+    if (roomName.isEmpty) {
+      _showError('Please enter a room name');
+      return;
+    }
 
-    _roomController.clear();
-    _loadRooms();
+    setState(() => _isCreatingRoom = true);
+
+    try {
+      // Create the room
+      final newRoom = await supabase
+          .from('rooms')
+          .insert({
+            'name': roomName,
+            'created_by': user.id,
+          })
+          .select()
+          .single();
+
+      // Auto-join the room as creator
+      await supabase.from('room_members').insert({
+        'room_id': newRoom['id'],
+        'user_id': user.id,
+      });
+
+      _roomController.clear();
+      await _loadRooms();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Room "$roomName" created successfully!'),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.all(isSmallScreen ? 8 : 16),
+          ),
+        );
+      }
+    } catch (e) {
+      _showError('Failed to create room: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isCreatingRoom = false);
+      }
+    }
   }
 
-  @override
-Widget build(BuildContext context) {
-  return Scaffold(
-    appBar: AppBar(title: const Text("Collaboration Rooms")),
-    body: Column(
-      children: [
-        Expanded(
-          child: ListView.builder(
-            itemCount: _rooms.length,
-            itemBuilder: (context, index) {
-              final room = _rooms[index];
-              return ListTile(
-                title: Text(room['name']),
-                onTap: () {
-                  final currentUserId = supabase.auth.currentUser?.id ?? '';
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => CollabRoomTabs(
-                        roomId: room['id'],
-                        roomName: room['name'],
-                        menteeId: currentUserId,
-                        mentorId: '', // puwede i-fetch from live_sessions kung may mentor na
-                        isMentor: false,
-                      ),
-                    ),
-                  );
-                },
-              );
-            },
-          ),
+  void _showError(String message) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.all(isSmallScreen ? 8 : 16),
         ),
-        Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: Row(
+      );
+    }
+  }
+
+  Future<void> _joinRoom(Map<String, dynamic> room) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) {
+      _showError('Please sign in to join a room');
+      return;
+    }
+
+    try {
+      // Check if user is already a member
+      final existingMembership = await supabase
+          .from('room_members')
+          .select()
+          .eq('room_id', room['id'])
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+      // If not a member, add them
+      if (existingMembership == null) {
+        await supabase.from('room_members').insert({
+          'room_id': room['id'],
+          'user_id': user.id,
+        });
+      }
+
+      // Check for live session to determine role
+      final session = await supabase
+          .from('live_sessions')
+          .select()
+          .eq('room_id', room['id'])
+          .maybeSingle();
+
+      String mentorId = '';
+      String menteeId = '';
+
+      if (session != null) {
+        mentorId = session['mentor_id']?.toString() ?? '';
+        menteeId = session['mentee_id']?.toString() ?? '';
+      }
+
+      if (mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CollabRoomTabs(
+              roomId: room['id'].toString(),
+              roomName: room['name'].toString(),
+              menteeId: menteeId,
+              mentorId: mentorId,
+              isMentor: user.id == mentorId,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      _showError('Failed to join room: $e');
+    }
+  }
+
+  Widget _buildRoomList() {
+    if (_isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(),
+      );
+    }
+
+    if (_rooms.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: EdgeInsets.all(isSmallScreen ? 16 : 24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Expanded(
-                child: TextField(
-                  controller: _roomController,
-                  decoration: const InputDecoration(
-                    labelText: "New Room",
-                    border: OutlineInputBorder(),
-                  ),
+              Icon(
+                Icons.meeting_room_outlined,
+                size: isSmallScreen ? 64 : 80,
+                color: Colors.grey.shade400,
+              ),
+              SizedBox(height: isSmallScreen ? 16 : 20),
+              Text(
+                'No rooms available',
+                style: TextStyle(
+                  fontSize: isSmallScreen ? 18 : 20,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.grey.shade600,
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.add),
-                onPressed: _createRoom,
+              SizedBox(height: isSmallScreen ? 8 : 12),
+              Text(
+                'Create the first room to get started!',
+                style: TextStyle(
+                  fontSize: isSmallScreen ? 14 : 16,
+                  color: Colors.grey.shade500,
+                ),
+                textAlign: TextAlign.center,
               ),
             ],
           ),
         ),
-      ],
-    ),
-  );
-}
+      );
+    }
+
+    return ListView.builder(
+      padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
+      itemCount: _rooms.length,
+      itemBuilder: (context, index) {
+        final room = _rooms[index];
+        return Card(
+          elevation: 2,
+          margin: EdgeInsets.symmetric(
+            vertical: isSmallScreen ? 4 : 6,
+            horizontal: isSmallScreen ? 0 : 4,
+          ),
+          child: ListTile(
+            leading: Icon(
+              Icons.meeting_room,
+              size: isSmallScreen ? 24 : 28,
+              color: Colors.indigo,
+            ),
+            title: Text(
+              room['name'].toString(),
+              style: TextStyle(
+                fontSize: isSmallScreen ? 16 : 18,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            subtitle: Text(
+              'ID: ${room['id']}',
+              style: TextStyle(
+                fontSize: isSmallScreen ? 12 : 14,
+                color: Colors.grey.shade600,
+              ),
+            ),
+            trailing: Icon(
+              Icons.arrow_forward_ios,
+              size: isSmallScreen ? 16 : 18,
+              color: Colors.grey.shade500,
+            ),
+            contentPadding: EdgeInsets.symmetric(
+              horizontal: isSmallScreen ? 16 : 20,
+              vertical: isSmallScreen ? 8 : 12,
+            ),
+            onTap: () => _joinRoom(room),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildRoomInput() {
+    return Container(
+      padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        border: Border(
+          top: BorderSide(color: Colors.grey.shade300),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _roomController,
+              decoration: InputDecoration(
+                labelText: "New Room Name",
+                hintText: "Enter room name...",
+                border: const OutlineInputBorder(),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: isSmallScreen ? 12 : 16,
+                  vertical: isSmallScreen ? 12 : 16,
+                ),
+              ),
+              onSubmitted: (_) => _createRoom(),
+              style: TextStyle(fontSize: isSmallScreen ? 16 : 18),
+            ),
+          ),
+          SizedBox(width: isSmallScreen ? 12 : 16),
+          _isCreatingRoom
+              ? SizedBox(
+                  width: isSmallScreen ? 24 : 28,
+                  height: isSmallScreen ? 24 : 28,
+                  child: const CircularProgressIndicator(strokeWidth: 2),
+                )
+              : IconButton(
+                  icon: Icon(
+                    Icons.add_circle,
+                    size: isSmallScreen ? 32 : 36,
+                    color: Colors.indigo,
+                  ),
+                  onPressed: _createRoom,
+                  tooltip: 'Create Room',
+                ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          "Collaboration Rooms",
+          style: TextStyle(
+            fontSize: isSmallScreen ? 18 : 20,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        backgroundColor: Colors.indigo,
+        foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: Icon(
+              Icons.refresh,
+              size: isSmallScreen ? 20 : 24,
+            ),
+            onPressed: _loadRooms,
+            tooltip: 'Refresh Rooms',
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: _buildRoomList(),
+          ),
+          _buildRoomInput(),
+        ],
+      ),
+    );
+  }
 }

@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:codexhub01/parts/sign_up.dart';
 import 'package:codexhub01/services/authservice.dart';
-import 'package:codexhub01/main.dart'; // User Dashboard
-import 'package:codexhub01/parts/mentor.dart'; // Mentor Dashboard
-import 'package:codexhub01/utils/forgotpass.dart'; // Forgot Password Screen
+import 'package:codexhub01/main.dart'; 
+import 'package:codexhub01/parts/mentor.dart'; 
+import 'package:codexhub01/utils/forgotpass.dart'; 
 
 class SignIn extends StatefulWidget {
   const SignIn({super.key});
@@ -31,6 +31,56 @@ class _SignInState extends State<SignIn> {
     if (mounted) setState(fn);
   }
 
+  // 🔹 Show verification dialog when email isn't verified
+  void _showVerificationDialog(String email) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Email Not Verified'),
+        content: Text('Please verify your email ($email) before logging in.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await _resendVerificationEmail(email);
+            },
+            child: const Text('Resend Verification Email'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 🔹 Resend email verification using AuthService
+  Future<void> _resendVerificationEmail(String email) async {
+    try {
+      final result = await _authService.resendVerificationEmail(email);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(result['success'] == true 
+                ? '✅ Verification email sent!' 
+                : '❌ Failed to send: ${result['error']}'),
+            backgroundColor: result['success'] == true ? Colors.green : Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _signIn() async {
     if (_isLoading) return;
 
@@ -47,23 +97,35 @@ class _SignInState extends State<SignIn> {
     try {
       final result = await _authService.signIn(email: email, password: password);
 
+      // Check if email needs verification
+      if (result['requiresEmailVerification'] == true) {
+        _showVerificationDialog(email);
+        return;
+      }
+
+      // Check if account needs admin approval
+      if (result['pendingApproval'] == true) {
+        _showError("Your account is pending admin approval. Please wait for approval to access the platform.");
+        return;
+      }
+
       if (result['success'] != true) {
         _showError(result['error'] ?? "Login failed.");
         return;
       }
 
-      final role = result['role'] ?? 'user';
+      final role = result['role'] ?? 'student';
 
       if (!mounted) return;
       if (role == 'mentor') {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => MentorDashboardScreen()),
+          MaterialPageRoute(builder: (_) =>  MentorDashboardScreen()),
         );
       } else {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => DashboardScreen()),
+          MaterialPageRoute(builder: (_) => const DashboardScreen()),
         );
       }
     } catch (e) {

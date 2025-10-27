@@ -12,18 +12,18 @@ class SignUp extends StatefulWidget {
 }
 
 class _SignUpState extends State<SignUp> {
-  final TextEditingController _usernameController = TextEditingController();
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
-  final TextEditingController _confirmPasswordController = TextEditingController();
+  final _usernameController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
 
   String? _selectedRole;
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
 
-  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
-  final AuthService _authService = AuthService();
+  final _formKey = GlobalKey<FormState>();
+  final _authService = AuthService();
 
   @override
   void dispose() {
@@ -39,56 +39,89 @@ class _SignUpState extends State<SignUp> {
   }
 
   Future<void> _signUp() async {
-    if (!_formKey.currentState!.validate()) return;
+  if (!_formKey.currentState!.validate()) return;
 
-    _safeSetState(() => _isLoading = true);
+  _safeSetState(() => _isLoading = true);
 
-    try {
-      final email = _emailController.text.trim();
-      final password = _passwordController.text.trim();
-      final username = _usernameController.text.trim();
-      final role = _selectedRole!.toLowerCase();
+  try {
+    final username = _usernameController.text.trim();
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
+    final role = _selectedRole?.toLowerCase();
 
-      final result = await _authService.signUp(
-        username: username,
-        email: email,
-        password: password,
-        role: role,
+    if (role == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("❌ Please select a role"), backgroundColor: Colors.red),
       );
+      return;
+    }
 
-      if (result['success'] == true) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("✅ Account created! Role: ${result['role']}"),
-            backgroundColor: Colors.green,
-          ),
-        );
+    final result = await _authService.signUp(
+      email: email,
+      password: password,
+      username: username,
+      role: role,
+    );
 
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const SignIn()),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("❌ Error: ${result['error']}"),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } catch (e) {
+    debugPrint('📝 AuthService result: $result');
+
+    if (!mounted) return;
+
+    if (result['success'] == true) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text("❌ Unexpected error: $e"),
+          content: Text("✅ ${result['message']}"),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const SignIn()),
+      );
+    } else if (result['requiresEmailVerification'] == true) {
+      // Email verification required
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("📧 Check your email! Verification link sent. You'll also need admin approval."),
+          backgroundColor: Colors.orange,
+          duration: Duration(seconds: 6),
+        ),
+      );
+      
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const SignIn()),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("❌ ${result['error']}"),
           backgroundColor: Colors.red,
         ),
       );
-    } finally {
-      _safeSetState(() => _isLoading = false);
     }
+  } catch (e, st) {
+    debugPrint('💥 Unexpected exception during signup: $e\n$st');
+    
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("❌ Unexpected error: $e"), backgroundColor: Colors.red),
+    );
+  } finally {
+    _safeSetState(() => _isLoading = false);
+  }
+}
+
+
+
+  // Validators - FIXED
+  String? _validateUsername(String? value) {
+    if (value == null || value.isEmpty) return 'Please enter a username';
+    return value.length >= 3 ? null : 'Username must be at least 3 characters';
   }
 
-  // ---------------- Validators ----------------
   String? _validateEmail(String? value) {
     if (value == null || value.isEmpty) return 'Please enter your email';
     final emailRegex = RegExp(r'^[^@]+@[^@]+\.[^@]+');
@@ -96,30 +129,21 @@ class _SignUpState extends State<SignUp> {
     return null;
   }
 
-  String? _validatePassword(String? value) {
-    if (value == null || value.isEmpty) return 'Please enter your password';
-    if (value.length < 6) return 'Password must be at least 6 characters';
-    return null;
-  }
+  String? _validatePassword(String? value) =>
+      (value == null || value.isEmpty)
+          ? 'Please enter your password'
+          : (value.length < 6 ? 'Password must be at least 6 characters' : null);
 
-  String? _validateConfirmPassword(String? value) {
-    if (value != _passwordController.text) return 'Passwords do not match';
-    return null;
-  }
+  String? _validateConfirmPassword(String? value) =>
+      value != _passwordController.text ? 'Passwords do not match' : null;
 
-  String? _validateUsername(String? value) {
-    if (value == null || value.isEmpty) return 'Please enter a username';
-    if (value.length < 3) return 'Username must be at least 3 characters';
-    return null;
-  }
+  String? _validateRole(String? value) =>
+      (value == null || value.isEmpty)
+          ? 'Please select a role'
+          : (value != 'student' && value != 'mentor' ? 'Invalid role selected' : null);
 
-  String? _validateRole(String? value) {
-    if (value == null || value.isEmpty) return 'Please select a role';
-    if (value != 'user' && value != 'mentor') return 'Invalid role selected';
-    return null;
-  }
 
-  // ---------------- Build UI ----------------
+  // UI - FIXED dropdown values
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -155,61 +179,25 @@ class _SignUpState extends State<SignUp> {
                     ),
                   ),
                   const SizedBox(height: 20),
-
-                  // Username
-                  _buildTextField(
-                    controller: _usernameController,
-                    label: "Username",
-                    icon: Icons.person_outline,
-                    validator: _validateUsername,
-                    isDark: isDark,
-                  ),
+                  _buildTextField(_usernameController, "Username", Icons.person_outline, _validateUsername, isDark),
                   const SizedBox(height: 20),
-
-                  // Email
-                  _buildTextField(
-                    controller: _emailController,
-                    label: "Email",
-                    icon: Icons.email_outlined,
-                    validator: _validateEmail,
-                    isDark: isDark,
-                  ),
+                  _buildTextField(_emailController, "Email", Icons.email_outlined, _validateEmail, isDark),
                   const SizedBox(height: 20),
-
-                  // Password
-                  _buildPasswordField(
-                    controller: _passwordController,
-                    label: "Password",
-                    obscureText: _obscurePassword,
-                    toggleObscure: () => _safeSetState(() => _obscurePassword = !_obscurePassword),
-                    isDark: isDark,
-                  ),
+                  _buildPasswordField(_passwordController, "Password", _obscurePassword, () => _safeSetState(() => _obscurePassword = !_obscurePassword), isDark),
                   const SizedBox(height: 20),
-
-                  // Confirm Password
-                  _buildPasswordField(
-                    controller: _confirmPasswordController,
-                    label: "Confirm Password",
-                    obscureText: _obscureConfirmPassword,
-                    toggleObscure: () => _safeSetState(() => _obscureConfirmPassword = !_obscureConfirmPassword),
-                    isDark: isDark,
-                  ),
+                  _buildPasswordField(_confirmPasswordController, "Confirm Password", _obscureConfirmPassword, () => _safeSetState(() => _obscureConfirmPassword = !_obscureConfirmPassword), isDark),
                   const SizedBox(height: 20),
-
-                  // Role Dropdown
                   DropdownButtonFormField<String>(
                     initialValue: _selectedRole,
                     onChanged: _isLoading ? null : (v) => _safeSetState(() => _selectedRole = v),
                     items: const [
-                      DropdownMenuItem(value: "user", child: Text("User")),
+                      DropdownMenuItem(value: "student", child: Text("Student")), // FIXED: changed "user" to "student"
                       DropdownMenuItem(value: "mentor", child: Text("Mentor")),
                     ],
                     decoration: const InputDecoration(labelText: "Select Role"),
                     validator: _validateRole,
                   ),
                   const SizedBox(height: 30),
-
-                  // Sign Up Button
                   SizedBox(
                     width: double.infinity,
                     height: 50,
@@ -229,26 +217,16 @@ class _SignUpState extends State<SignUp> {
                           ),
                   ),
                   const SizedBox(height: 20),
-
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Text(
-                        "Already have an account?",
-                        style: TextStyle(color: isDark ? Colors.white70 : Colors.black87),
-                      ),
+                      Text("Already have an account?", style: TextStyle(color: isDark ? Colors.white70 : Colors.black87)),
                       TextButton(
-                        onPressed: () => Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(builder: (_) => const SignIn()),
-                        ),
-                        child: Text(
-                          "Login",
-                          style: TextStyle(
-                            color: theme.colorScheme.primary,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
+                        onPressed: () {
+                          if (!mounted) return;
+                          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const SignIn()));
+                        },
+                        child: Text("Login", style: TextStyle(color: theme.colorScheme.primary, fontWeight: FontWeight.w600)),
                       ),
                     ],
                   ),
@@ -261,14 +239,7 @@ class _SignUpState extends State<SignUp> {
     );
   }
 
-  // ---------------- Helper Widgets ----------------
-  Widget _buildTextField({
-    required TextEditingController controller,
-    required String label,
-    required IconData icon,
-    required String? Function(String?)? validator,
-    required bool isDark,
-  }) {
+  Widget _buildTextField(TextEditingController controller, String label, IconData icon, String? Function(String?)? validator, bool isDark) {
     return TextFormField(
       controller: controller,
       validator: validator,
@@ -277,21 +248,12 @@ class _SignUpState extends State<SignUp> {
         prefixIcon: Icon(icon),
         filled: true,
         fillColor: isDark ? Colors.grey[800] : Colors.grey[100],
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide.none,
-        ),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
       ),
     );
   }
 
-  Widget _buildPasswordField({
-    required TextEditingController controller,
-    required String label,
-    required bool obscureText,
-    required VoidCallback toggleObscure,
-    required bool isDark,
-  }) {
+  Widget _buildPasswordField(TextEditingController controller, String label, bool obscureText, VoidCallback toggleObscure, bool isDark) {
     return TextFormField(
       controller: controller,
       obscureText: obscureText,
@@ -301,15 +263,9 @@ class _SignUpState extends State<SignUp> {
         prefixIcon: const Icon(Icons.lock_outline),
         filled: true,
         fillColor: isDark ? Colors.grey[800] : Colors.grey[100],
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide.none,
-        ),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
         suffixIcon: IconButton(
-          icon: Icon(
-            obscureText ? Icons.visibility : Icons.visibility_off,
-            color: Theme.of(context).colorScheme.primary,
-          ),
+          icon: Icon(obscureText ? Icons.visibility : Icons.visibility_off, color: Theme.of(context).colorScheme.primary),
           onPressed: toggleObscure,
         ),
       ),

@@ -276,6 +276,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    final isSmallScreen = screenSize.width < 600;
+    final isVerySmallScreen = screenSize.width < 400;
+
     final currentUserId = service.currentUserId;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -288,125 +292,161 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       backgroundColor: backgroundColor,
       appBar: AppBar(
-        title: Text(widget.otherUserName),
+        title: Text(
+          widget.otherUserName,
+          style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
+        ),
         backgroundColor: isDark ? Colors.indigo.shade700 : Colors.indigo,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
+          icon: Icon(
+            Icons.arrow_back,
+            size: isSmallScreen ? 20 : 24,
+          ),
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
+          if (!isVerySmallScreen)
+            IconButton(
+              icon: Icon(
+                Icons.call,
+                size: isSmallScreen ? 20 : 24,
+              ),
+              tooltip: "Audio Call",
+              onPressed: () async => _startCall('audio'),
+            ),
           IconButton(
-            icon: const Icon(Icons.call),
-            tooltip: "Audio Call",
-            onPressed: () async => _startCall('audio'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.videocam),
+            icon: Icon(
+              Icons.videocam,
+              size: isSmallScreen ? 20 : 24,
+            ),
             tooltip: "Video Call",
             onPressed: () async => _startCall('video'),
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.all(8),
-              itemCount: messages.length,
-              itemBuilder: (context, index) {
-                final msg = messages[index];
-                final isMe = msg['sender_id'].toString() == currentUserId;
-                final messageText = msg['message'] ?? '';
-                final createdAt = msg['created_at'] ?? '';
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: ListView.builder(
+                controller: _scrollController,
+                padding: EdgeInsets.all(isSmallScreen ? 6 : 8),
+                itemCount: messages.length,
+                itemBuilder: (context, index) {
+                  final msg = messages[index];
+                  final isMe = msg['sender_id'].toString() == currentUserId;
+                  final messageText = msg['message'] ?? '';
+                  final createdAt = msg['created_at'] ?? '';
 
-                return Align(
-                  alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(vertical: 4),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: isMe ? bubbleColorMe : bubbleColorOther,
-                      borderRadius: BorderRadius.circular(16),
+                  return Align(
+                    alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                    child: Container(
+                      constraints: BoxConstraints(
+                        maxWidth: screenSize.width * 0.75,
+                      ),
+                      margin: EdgeInsets.symmetric(
+                        vertical: isSmallScreen ? 2 : 4,
+                        horizontal: isSmallScreen ? 4 : 8,
+                      ),
+                      padding: EdgeInsets.all(isSmallScreen ? 10 : 12),
+                      decoration: BoxDecoration(
+                        color: isMe ? bubbleColorMe : bubbleColorOther,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (!isVerySmallScreen)
+                            Text(
+                              isMe ? 'You' : widget.otherUserName,
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: isSmallScreen ? 12 : 14,
+                                color: isMe ? textColorMe : textColorOther,
+                              ),
+                            ),
+                          if (!isVerySmallScreen) SizedBox(height: isSmallScreen ? 2 : 4),
+                          Text(
+                            messageText,
+                            style: TextStyle(
+                              fontSize: isSmallScreen ? 14 : 16,
+                              color: isMe ? textColorMe : textColorOther,
+                            ),
+                          ),
+                          SizedBox(height: isSmallScreen ? 1 : 2),
+                          Text(
+                            _formatTime(createdAt),
+                            style: TextStyle(
+                              fontSize: isSmallScreen ? 9 : 10,
+                              color: isMe ? Colors.white70 : Colors.grey,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          isMe ? 'You' : widget.otherUserName,
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: isMe ? textColorMe : textColorOther,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          messageText,
-                          style: TextStyle(
-                            color: isMe ? textColorMe : textColorOther,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          _formatTime(createdAt),
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: isMe ? Colors.white70 : Colors.grey,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: isDark ? Colors.grey.shade900 : Colors.grey[100],
-              border: Border(
-                top: BorderSide(
-                  color: isDark ? Colors.grey.shade800 : Colors.grey[300]!,
-                ),
+                  );
+                },
               ),
             ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: messageController,
-                    style: TextStyle(color: isDark ? Colors.white : Colors.black),
-                    decoration: InputDecoration(
-                      hintText: isSending ? "Sending..." : "Type a message...",
-                      hintStyle:
-                          TextStyle(color: isDark ? Colors.white70 : Colors.grey),
-                      filled: true,
-                      fillColor: isDark ? Colors.grey.shade800 : Colors.white,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: BorderSide.none,
+            Container(
+              padding: EdgeInsets.all(isSmallScreen ? 6 : 8),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.grey.shade900 : Colors.grey[100],
+                border: Border(
+                  top: BorderSide(
+                    color: isDark ? Colors.grey.shade800 : Colors.grey[300]!,
+                  ),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: messageController,
+                      style: TextStyle(
+                        color: isDark ? Colors.white : Colors.black,
+                        fontSize: isSmallScreen ? 14 : 16,
                       ),
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 10),
+                      decoration: InputDecoration(
+                        hintText: isSending ? "Sending..." : "Type a message...",
+                        hintStyle: TextStyle(
+                          color: isDark ? Colors.white70 : Colors.grey,
+                          fontSize: isSmallScreen ? 14 : 16,
+                        ),
+                        filled: true,
+                        fillColor: isDark ? Colors.grey.shade800 : Colors.white,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: BorderSide.none,
+                        ),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: isSmallScreen ? 14 : 16,
+                          vertical: isSmallScreen ? 12 : 14,
+                        ),
+                      ),
+                      onSubmitted: (_) => _sendMessage(),
+                      enabled: !isSending,
                     ),
-                    onSubmitted: (_) => _sendMessage(),
-                    enabled: !isSending,
                   ),
-                ),
-                const SizedBox(width: 8),
-                CircleAvatar(
-                  backgroundColor:
-                      isDark ? Colors.indigoAccent.shade400 : Colors.indigo,
-                  child: IconButton(
-                    icon: const Icon(Icons.send, color: Colors.white),
-                    onPressed: isSending ? null : _sendMessage,
+                  SizedBox(width: isSmallScreen ? 6 : 8),
+                  CircleAvatar(
+                    radius: isSmallScreen ? 20 : 24,
+                    backgroundColor:
+                        isDark ? Colors.indigoAccent.shade400 : Colors.indigo,
+                    child: IconButton(
+                      icon: Icon(
+                        Icons.send,
+                        color: Colors.white,
+                        size: isSmallScreen ? 18 : 20,
+                      ),
+                      onPressed: isSending ? null : _sendMessage,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

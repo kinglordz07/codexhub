@@ -73,13 +73,16 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
       length: 3,
       child: Scaffold(
         appBar: AppBar(
+          backgroundColor: Colors.indigo,
           title: const Text("Friends"),
           bottom: const TabBar(
+            labelColor: Colors.white,
+            unselectedLabelColor: Colors.lightBlueAccent,
             tabs: [
               Tab(text: "Requests"),
               Tab(text: "Friends"),
               Tab(text: "People You May Know"),
-            ],
+          ],
           ),
         ),
         body: Column(
@@ -122,7 +125,7 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
     }
     return ListView(
       children: requests.map((req) {
-        final user = req['profiles'];
+        final user = req['profiles_new'];
         if (user == null) return const SizedBox.shrink();
 
         final requestId = req['id']?.toString();
@@ -141,7 +144,7 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
               child: avatarUrl.isEmpty ? const Icon(Icons.person) : null,
             ),
             title: Text(username),
-            subtitle: Text(user['email'] ?? ''),
+            subtitle: Text(user['role'] ?? 'Mentor'),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -220,7 +223,6 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
 
       final id = profile['id']?.toString();
       final username = profile['username']?.toString() ?? 'Unknown';
-      final email = profile['email']?.toString() ?? '';
       final avatarUrl = profile['avatar_url'] ?? '';
 
       if (id == null) return const SizedBox.shrink();
@@ -239,7 +241,7 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
             username,
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
-          subtitle: Text(email),
+          subtitle: Text(profile['role'] ?? 'Mentor'),
           trailing: IconButton(
             icon: const Icon(Icons.chat, color: Colors.indigo),
             onPressed: () async {
@@ -278,11 +280,10 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
     return ListView.builder(
       itemCount: list.length,
       itemBuilder: (context, index) {
-        final user = list[index]['profiles'] ?? list[index];
+        final user = list[index]['profiles_new'] ?? list[index];
         final avatarUrl = user['avatar_url'] ?? '';
         final id = user['id']?.toString();
         final username = user['username']?.toString() ?? 'Unknown';
-        final email = user['email']?.toString() ?? '';
 
         if (id == null) return const SizedBox.shrink();
 
@@ -295,7 +296,7 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
               child: avatarUrl.isEmpty ? const Icon(Icons.person) : null,
             ),
             title: Text(username),
-            subtitle: Text(email),
+            subtitle: Text(user['role'] ?? 'Mentor'),
             trailing: IconButton(
               icon: const Icon(Icons.person_add, color: Colors.blue),
               onPressed: () async {

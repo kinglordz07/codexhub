@@ -1,5 +1,3 @@
-// ignore_for_file: prefer_final_fields
-
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -43,7 +41,6 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen> {
   Timer? _typingTimer;
   Timer? _cursorTimer;
   RealtimeChannel? _channel;
-  Color _feedbackBg = Colors.transparent;
 
   String? _lastLocalCode;
 
@@ -72,6 +69,22 @@ class Program {
 }
 ''',
   };
+
+  // Responsive layout detection
+  bool get isSmallScreen {
+    final mediaQuery = MediaQuery.of(context);
+    return mediaQuery.size.width < 600;
+  }
+
+  bool get isMediumScreen {
+    final mediaQuery = MediaQuery.of(context);
+    return mediaQuery.size.width >= 600 && mediaQuery.size.width < 1024;
+  }
+
+  bool get isLargeScreen {
+    final mediaQuery = MediaQuery.of(context);
+    return mediaQuery.size.width >= 1024;
+  }
 
   @override
   void initState() {
@@ -126,7 +139,9 @@ class Program {
     } catch (e) {
       debugPrint('❌ Error loading session: $e');
     } finally {
-      if (mounted) setState(() => isLoading = false);
+      if (mounted) {
+        setState(() => isLoading = false);
+      }
     }
   }
 
@@ -187,13 +202,12 @@ class Program {
               final cursorOffset = _codeController.selection.baseOffset;
               final scrollOffset = _codeScrollController.offset;
 
-             _codeController.value = TextEditingValue(
-  text: remoteCode,
-  selection: TextSelection.collapsed(
-    offset: cursorOffset.clamp(0, remoteCode.length).toInt(),
-  ),
-);
-
+              _codeController.value = TextEditingValue(
+                text: remoteCode,
+                selection: TextSelection.collapsed(
+                  offset: cursorOffset.clamp(0, remoteCode.length).toInt(),
+                ),
+              );
 
               _lastLocalCode = remoteCode;
 
@@ -207,8 +221,9 @@ class Program {
               _feedbackController.text = newData['mentor_feedback'];
             }
 
-            final otherCursorField =
-                (_currentUserId == _mentorId) ? 'mentee_cursor' : 'mentor_cursor';
+            final otherCursorField = (_currentUserId == _mentorId)
+                ? 'mentee_cursor'
+                : 'mentor_cursor';
             _otherUserCursor = newData[otherCursorField];
 
             output = newData['output'] ?? output;
@@ -229,13 +244,10 @@ class Program {
 
   Future<void> _updateLiveField(String field, dynamic value) async {
     try {
-      await supabase
-          .from('live_sessions')
-          .update({
-            field: value,
-            'last_editor': _currentUserId,
-          })
-          .eq('room_id', widget.roomId);
+      await supabase.from('live_sessions').update({
+        field: value,
+        'last_editor': _currentUserId,
+      }).eq('room_id', widget.roomId);
     } catch (e) {
       debugPrint('⚠️ Error updating $field: $e');
     }
@@ -268,13 +280,19 @@ class Program {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('💾 Code saved!')),
+          SnackBar(
+            content: const Text('💾 Code saved!'),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.all(isSmallScreen ? 8 : 16),
+          ),
         );
       }
     } catch (e) {
       debugPrint('❌ Error saving code: $e');
     } finally {
-      setState(() => isSaving = false);
+      if (mounted) {
+        setState(() => isSaving = false);
+      }
     }
   }
 
@@ -282,7 +300,8 @@ class Program {
     if (!canEdit) return;
     setState(() => output = 'Running code...');
     await Future.delayed(const Duration(milliseconds: 500));
-    final result = _getFakeExecutionResult(_codeController.text, selectedLanguage);
+    final result =
+        _getFakeExecutionResult(_codeController.text, selectedLanguage);
     setState(() => output = result);
     await _updateLiveField('output', result);
   }
@@ -318,131 +337,201 @@ class Program {
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildLanguageSelector() {
+    return DropdownButtonFormField<String>(
+      initialValue: selectedLanguage,
+      decoration: InputDecoration(
+        border: const OutlineInputBorder(),
+        contentPadding: EdgeInsets.symmetric(
+          horizontal: isSmallScreen ? 12 : 16,
+          vertical: isSmallScreen ? 14 : 16,
+        ),
+      ),
+      items: const [
+        DropdownMenuItem(value: 'python', child: Text('Python')),
+        DropdownMenuItem(value: 'vbnet', child: Text('VB.NET')),
+        DropdownMenuItem(value: 'java', child: Text('Java')),
+        DropdownMenuItem(value: 'csharp', child: Text('C#')),
+      ],
+      onChanged: canEdit
+          ? (v) {
+              if (v != null) {
+                setState(() {
+                  selectedLanguage = v;
+                  _codeController.text = defaultSnippets[v] ?? '';
+                  _lastLocalCode = _codeController.text;
+                });
+              }
+            }
+          : null,
+    );
+  }
+
+  Widget _buildCodeEditor() {
     const double charWidth = 8;
     const double lineHeight = 20;
     const int charsPerLine = 80;
 
+    return Container(
+      height: isSmallScreen ? 250 : 300,
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade400),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Stack(
+        children: [
+          TextField(
+            controller: _codeController,
+            maxLines: null,
+            expands: true,
+            readOnly: !canEdit,
+            decoration: InputDecoration(
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.all(isSmallScreen ? 8 : 12),
+            ),
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: isSmallScreen ? 13 : 14,
+            ),
+          ),
+          if (_otherUserCursor != null &&
+              _otherUserCursor! <= _codeController.text.length)
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 100),
+              left: (_otherUserCursor! % charsPerLine) * charWidth,
+              top: (_otherUserCursor! ~/ charsPerLine) * lineHeight,
+              child: Container(
+                width: 2,
+                height: lineHeight,
+                color: Colors.red,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOutputPanel() {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade400),
+        borderRadius: BorderRadius.circular(8),
+        color: Colors.grey.shade50,
+      ),
+      child: Text(
+        'Output:\n$output',
+        style: TextStyle(
+          fontSize: isSmallScreen ? 14 : 16,
+          fontFamily: 'monospace',
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFeedbackPanel() {
+    if (_isMentorCurrentUser()) {
+      return TextField(
+        controller: _feedbackController,
+        maxLines: 4,
+        decoration: InputDecoration(
+          border: const OutlineInputBorder(),
+          hintText: 'Type mentor feedback here...',
+          contentPadding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+        ),
+        style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+      );
+    } else {
+      return Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.green),
+          borderRadius: BorderRadius.circular(8),
+          color: Colors.green.withAlpha(20),
+        ),
+        child: Text(
+          'Mentor Feedback:\n${_feedbackController.text.isEmpty ? "No feedback yet" : _feedbackController.text}',
+          style: TextStyle(
+            color: Colors.green.shade800,
+            fontSize: isSmallScreen ? 14 : 16,
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     if (isLoading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
     }
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('CodeLiveReview'),
+        title: Text(
+          'CodeLiveReview',
+          style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
+        ),
         actions: [
           if (canEdit)
             IconButton(
               icon: isSaving
-                  ? const CircularProgressIndicator(color: Colors.white)
-                  : const Icon(Icons.save),
+                  ? SizedBox(
+                      width: isSmallScreen ? 20 : 24,
+                      height: isSmallScreen ? 20 : 24,
+                      child: const CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Icon(
+                      Icons.save,
+                      size: isSmallScreen ? 20 : 24,
+                    ),
               onPressed: _saveCode,
+              tooltip: 'Save Code',
             ),
           if (canEdit)
             IconButton(
-              icon: const Icon(Icons.play_arrow),
+              icon: Icon(
+                Icons.play_arrow,
+                size: isSmallScreen ? 20 : 24,
+              ),
               onPressed: _runCode,
+              tooltip: 'Run Code',
             ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: SingleChildScrollView(
-          controller: _codeScrollController,
+      body: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              DropdownButtonFormField<String>(
-                initialValue: selectedLanguage,
-                items: const [
-                  DropdownMenuItem(value: 'python', child: Text('Python')),
-                  DropdownMenuItem(value: 'vbnet', child: Text('VB.NET')),
-                  DropdownMenuItem(value: 'java', child: Text('Java')),
-                  DropdownMenuItem(value: 'csharp', child: Text('C#')),
-                ],
-                onChanged: canEdit
-                    ? (v) {
-                        if (v != null) {
-                          setState(() {
-                            selectedLanguage = v;
-                            _codeController.text = defaultSnippets[v] ?? '';
-                            _lastLocalCode = _codeController.text;
-                          });
-                        }
-                      }
-                    : null,
-              ),
-              const SizedBox(height: 10),
-              Container(
-                height: 300,
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey),
-                  borderRadius: BorderRadius.circular(5),
-                ),
-                child: Stack(
-                  children: [
-                    TextField(
-                      controller: _codeController,
-                      maxLines: null,
-                      expands: true,
-                      readOnly: !canEdit,
-                      decoration: const InputDecoration(
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.all(8),
-                      ),
-                      style:
-                          const TextStyle(fontFamily: 'monospace', fontSize: 14),
-                    ),
-                    if (_otherUserCursor != null &&
-                        _otherUserCursor! <= _codeController.text.length)
-                      AnimatedPositioned(
-                        duration: const Duration(milliseconds: 100),
-                        left: (_otherUserCursor! % charsPerLine) * charWidth,
-                        top: (_otherUserCursor! ~/ charsPerLine) * lineHeight,
-                        child: Container(
-                          width: 2,
-                          height: lineHeight,
-                          color: Colors.red,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 10),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey),
-                  borderRadius: BorderRadius.circular(5),
-                ),
-                child: Text('Output:\n$output'),
-              ),
-              const SizedBox(height: 10),
-              if (_isMentorCurrentUser())
-                TextField(
-                  controller: _feedbackController,
-                  maxLines: 4,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    hintText: 'Type mentor feedback here...',
-                  ),
-                )
-              else
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.green),
-                    borderRadius: BorderRadius.circular(5),
-                    color: _feedbackBg,
-                  ),
-                  child: Text(
-                    'Mentor Feedback:\n${_feedbackController.text}',
-                    style: const TextStyle(color: Colors.green),
+              _buildLanguageSelector(),
+              SizedBox(height: isSmallScreen ? 12 : 16),
+              Expanded(
+                child: SingleChildScrollView(
+                  controller: _codeScrollController,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildCodeEditor(),
+                      SizedBox(height: isSmallScreen ? 12 : 16),
+                      _buildOutputPanel(),
+                      SizedBox(height: isSmallScreen ? 12 : 16),
+                      _buildFeedbackPanel(),
+                      SizedBox(height: isSmallScreen ? 12 : 16),
+                    ],
                   ),
                 ),
+              ),
             ],
           ),
         ),

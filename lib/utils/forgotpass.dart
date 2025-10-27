@@ -1,6 +1,6 @@
-import 'package:codexhub01/parts/newpass.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:codexhub01/utils/newpass.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
@@ -10,15 +10,17 @@ class ForgotPasswordScreen extends StatefulWidget {
 }
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
-  final _emailController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
   bool _isLoading = false;
 
+  /// Sends the password reset email via Supabase
   Future<void> _sendResetEmail() async {
     final email = _emailController.text.trim();
+
     if (email.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Please enter your email')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter your email')),
+      );
       return;
     }
 
@@ -27,7 +29,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     try {
       await Supabase.instance.client.auth.resetPasswordForEmail(
         email,
-        redirectTo: 'com.codexhub01://reset-callback/', // your app's deep link
+        redirectTo: 'com.codexhub01://reset-callback/', // Deep link to your app
       );
 
       if (!mounted) return;
@@ -41,9 +43,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error sending reset email: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error sending reset email: $e')),
+      );
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -53,10 +55,10 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   void initState() {
     super.initState();
 
-    // Listen for password recovery links
-    Supabase.instance.client.auth.onAuthStateChange.listen((data) {
-      if (data.event == AuthChangeEvent.passwordRecovery) {
-        final token = data.session?.accessToken;
+    // Listen for password recovery events from Supabase
+    Supabase.instance.client.auth.onAuthStateChange.listen((event) {
+      if (event.event == AuthChangeEvent.passwordRecovery) {
+        final token = event.session?.accessToken;
         if (token != null && mounted) {
           Navigator.pushReplacement(
             context,
@@ -79,16 +81,22 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
           children: [
             TextField(
               controller: _emailController,
-              decoration: const InputDecoration(labelText: 'Email'),
+              decoration: const InputDecoration(
+                labelText: 'Email',
+                border: OutlineInputBorder(),
+              ),
               keyboardType: TextInputType.emailAddress,
             ),
             const SizedBox(height: 20),
             _isLoading
                 ? const CircularProgressIndicator()
-                : ElevatedButton(
-                  onPressed: _sendResetEmail,
-                  child: const Text('Send Reset Email'),
-                ),
+                : SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _sendResetEmail,
+                      child: const Text('Send Reset Email'),
+                    ),
+                  ),
           ],
         ),
       ),

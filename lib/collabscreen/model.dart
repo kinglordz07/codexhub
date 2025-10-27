@@ -7,7 +7,7 @@ class Room {
 
   factory Room.fromJson(Map<String, dynamic> json) {
     return Room(
-      id: json['id'].toString(), // siguraduhing string
+      id: json['id'].toString(), 
       name: json['name'] as String,
     );
   }

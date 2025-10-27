@@ -70,12 +70,11 @@ class _ProfileScreenState extends State<ProfileScreen>
     final userEmail = user.email ?? "unknown@example.com";
 
     try {
-      final response =
-          await supabase
-              .from('profiles')
-              .select('username, avatar_url')
-              .eq('id', user.id)
-              .maybeSingle();
+      final response = await supabase
+          .from('profiles_new')
+          .select('username, avatar_url')
+          .eq('id', user.id)
+          .maybeSingle();
 
       if (!mounted) return;
 
@@ -104,7 +103,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Future<void> _createBasicProfile(User user, String userEmail) async {
     try {
-      await supabase.from('profiles').insert({
+      await supabase.from('profiles_new').insert({
         'id': user.id,
         'username': user.email?.split('@').first ?? 'User',
         'email': userEmail,
@@ -202,13 +201,12 @@ class _ProfileScreenState extends State<ProfileScreen>
 
     showDialog(
       context: context,
-      builder:
-          (context) => EditProfileDialog(
-            currentUsername: userName,
-            currentAvatarUrl: profileImageUrl,
-            onSave: _handleProfileUpdate,
-            currentRole: '',
-          ),
+      builder: (context) => EditProfileDialog(
+        currentUsername: userName,
+        currentAvatarUrl: profileImageUrl,
+        onSave: _handleProfileUpdate,
+        currentRole: '',
+      ),
     );
   }
 
@@ -261,7 +259,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
       // Update profile in database
       debugPrint("💾 Updating profile...");
-      await supabase.from('profiles').update(updateData).eq('id', user.id);
+      await supabase.from('profiles_new').update(updateData).eq('id', user.id);
 
       debugPrint("✅ Profile updated successfully");
 
@@ -280,148 +278,194 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   @override
   Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    final isSmallScreen = screenSize.width < 600;
+
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Profile Settings'),
+        title: Text(
+          'Profile Settings',
+          style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
+        ),
         backgroundColor: Colors.indigo,
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
+            icon: Icon(
+              Icons.refresh,
+              size: isSmallScreen ? 20 : 24,
+            ),
             onPressed: _loadUserProfile,
             tooltip: "Refresh profile",
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(24.0),
-        children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Row(
-                children: [
-                  GestureDetector(
-                    onTap: () {
-                      if (profileImageUrl != null && mounted) {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder:
-                                (_) => FullScreenProfilePic(
-                                  imageUrl: profileImageUrl,
-                                ),
-                          ),
-                        );
-                      }
-                    },
-                    child: Hero(
-                      tag: "profilePicHero",
-                      child: CircleAvatar(
-                        radius: 40,
-                        backgroundColor: Colors.grey[300],
-                        backgroundImage:
-                            profileImageUrl != null
-                                ? NetworkImage(profileImageUrl!)
-                                : null,
-                        child:
-                            profileImageUrl == null
-                                ? const Icon(
+      body: SafeArea(
+        child: ListView(
+          padding: EdgeInsets.all(isSmallScreen ? 16 : 24),
+          children: [
+            // Profile Header Card
+            Card(
+              child: Padding(
+                padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+                child: Row(
+                  children: [
+                    GestureDetector(
+                      onTap: () {
+                        if (profileImageUrl != null && mounted) {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => FullScreenProfilePic(
+                                imageUrl: profileImageUrl,
+                              ),
+                            ),
+                          );
+                        }
+                      },
+                      child: Hero(
+                        tag: "profilePicHero",
+                        child: CircleAvatar(
+                          radius: isSmallScreen ? 30 : 40,
+                          backgroundColor: Colors.grey[300],
+                          backgroundImage: profileImageUrl != null
+                              ? NetworkImage(profileImageUrl!)
+                              : null,
+                          child: profileImageUrl == null
+                              ? Icon(
                                   Icons.account_circle,
-                                  size: 70,
+                                  size: isSmallScreen ? 50 : 70,
                                   color: Colors.grey,
                                 )
-                                : null,
+                              : null,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          userName,
-                          style: const TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
+                    SizedBox(width: isSmallScreen ? 12 : 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            userName,
+                            style: TextStyle(
+                              fontSize: isSmallScreen ? 18 : 24,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                        ),
-                        Text(
-                          email,
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: Colors.grey[600],
+                          SizedBox(height: isSmallScreen ? 2 : 4),
+                          Text(
+                            email,
+                            style: TextStyle(
+                              fontSize: isSmallScreen ? 14 : 16,
+                              color: Colors.grey[600],
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                        ),
-                        const SizedBox(height: 4),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
+                          SizedBox(height: isSmallScreen ? 2 : 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
+                  ],
+                ),
+              ),
+            ),
+
+            SizedBox(height: isSmallScreen ? 16 : 24),
+
+            // Settings Card
+            Card(
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: Icon(
+                      Icons.dark_mode,
+                      size: isSmallScreen ? 20 : 24,
+                    ),
+                    title: Text(
+                      "Dark Mode",
+                      style: TextStyle(fontSize: isSmallScreen ? 16 : 18),
+                    ),
+                    trailing: Switch(
+                      value: isDarkMode,
+                      onChanged: _toggleDarkMode,
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: Icon(
+                      Icons.notifications,
+                      size: isSmallScreen ? 20 : 24,
+                    ),
+                    title: Text(
+                      "Notifications",
+                      style: TextStyle(fontSize: isSmallScreen ? 16 : 18),
+                    ),
+                    trailing: Switch(
+                      value: notificationsEnabled,
+                      onChanged: _toggleNotifications,
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: Icon(
+                      Icons.edit,
+                      size: isSmallScreen ? 20 : 24,
+                    ),
+                    title: Text(
+                      "Edit Profile",
+                      style: TextStyle(fontSize: isSmallScreen ? 16 : 18),
+                    ),
+                    trailing: Icon(
+                      Icons.arrow_forward_ios,
+                      size: isSmallScreen ? 16 : 18,
+                    ),
+                    onTap: _editProfile,
                   ),
                 ],
               ),
             ),
-          ),
 
-          const SizedBox(height: 24),
+            SizedBox(height: isSmallScreen ? 16 : 24),
 
-          Card(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.dark_mode),
-                  title: const Text("Dark Mode"),
-                  trailing: Switch(
-                    value: isDarkMode,
-                    onChanged: _toggleDarkMode,
+            // Logout Button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  if (mounted) _confirmLogout(context);
+                },
+                icon: Icon(
+                  Icons.logout,
+                  size: isSmallScreen ? 18 : 20,
+                ),
+                label: Text(
+                  "Log Out",
+                  style: TextStyle(fontSize: isSmallScreen ? 16 : 18),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red[50],
+                  foregroundColor: Colors.red,
+                  padding: EdgeInsets.symmetric(
+                    vertical: isSmallScreen ? 14 : 16,
                   ),
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.notifications),
-                  title: const Text("Notifications"),
-                  trailing: Switch(
-                    value: notificationsEnabled,
-                    onChanged: _toggleNotifications,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.edit),
-                  title: const Text("Edit Profile"),
-                  trailing: const Icon(Icons.arrow_forward_ios),
-                  onTap: _editProfile,
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 24),
-
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () {
-                if (mounted) _confirmLogout(context);
-              },
-              icon: const Icon(Icons.logout),
-              label: const Text("Log Out"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red[50],
-                foregroundColor: Colors.red,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -433,7 +477,7 @@ class EditProfileDialog extends StatefulWidget {
   final String currentRole;
   final String? currentAvatarUrl;
   final Function({required String newUsername, required XFile? newAvatar})
-  onSave;
+      onSave;
 
   const EditProfileDialog({
     super.key,
@@ -460,6 +504,12 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
     _usernameController.text = widget.currentUsername;
   }
 
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    super.dispose();
+  }
+
   Future<void> _pickImage() async {
     try {
       final XFile? pickedFile = await _picker.pickImage(
@@ -478,9 +528,9 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text("Failed to pick image: $e")));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to pick image: $e")),
+        );
       }
     }
   }
@@ -509,9 +559,9 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text("Error: ${e.toString()}")));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: ${e.toString()}")),
+        );
         setState(() => _isSaving = false);
       }
     }
@@ -528,8 +578,14 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    final isSmallScreen = screenSize.width < 600;
+
     return AlertDialog(
-      title: const Text("Edit Profile"),
+      title: Text(
+        "Edit Profile",
+        style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
+      ),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -540,44 +596,56 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
                 GestureDetector(
                   onTap: _pickImage,
                   child: CircleAvatar(
-                    radius: 50,
+                    radius: isSmallScreen ? 40 : 50,
                     backgroundColor: Colors.grey[300],
                     backgroundImage: _getAvatarImage(),
-                    child:
-                        _getAvatarImage() == null
-                            ? const Icon(
-                              Icons.camera_alt,
-                              size: 40,
-                              color: Colors.grey,
-                            )
-                            : null,
+                    child: _getAvatarImage() == null
+                        ? Icon(
+                            Icons.camera_alt,
+                            size: isSmallScreen ? 30 : 40,
+                            color: Colors.grey,
+                          )
+                        : null,
                   ),
                 ),
-                const SizedBox(height: 8),
+                SizedBox(height: isSmallScreen ? 6 : 8),
                 TextButton.icon(
                   onPressed: _pickImage,
-                  icon: const Icon(Icons.edit),
-                  label: const Text("Change Photo"),
+                  icon: Icon(
+                    Icons.edit,
+                    size: isSmallScreen ? 18 : 20,
+                  ),
+                  label: Text(
+                    "Change Photo",
+                    style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 20),
+            SizedBox(height: isSmallScreen ? 16 : 20),
 
             // Username Field
             TextField(
               controller: _usernameController,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: "Username",
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.person),
+                border: const OutlineInputBorder(),
+                prefixIcon: Icon(
+                  Icons.person,
+                  size: isSmallScreen ? 20 : 24,
+                ),
               ),
+              style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
             ),
-            const SizedBox(height: 10),
+            SizedBox(height: isSmallScreen ? 8 : 10),
 
             // Role Display
             Text(
               "Role: ${widget.currentRole}",
-              style: TextStyle(color: Colors.grey[600], fontSize: 14),
+              style: TextStyle(
+                color: Colors.grey[600],
+                fontSize: isSmallScreen ? 12 : 14,
+              ),
             ),
           ],
         ),
@@ -585,18 +653,23 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
       actions: [
         TextButton(
           onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
-          child: const Text("Cancel"),
+          child: Text(
+            "Cancel",
+            style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+          ),
         ),
         ElevatedButton(
           onPressed: _isSaving ? null : _saveProfile,
-          child:
-              _isSaving
-                  ? const SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                  : const Text("Save"),
+          child: _isSaving
+              ? SizedBox(
+                  height: isSmallScreen ? 18 : 20,
+                  width: isSmallScreen ? 18 : 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Text(
+                  "Save",
+                  style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+                ),
         ),
       ],
     );
@@ -610,6 +683,9 @@ class FullScreenProfilePic extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    final isSmallScreen = screenSize.width < 600;
+
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -617,27 +693,28 @@ class FullScreenProfilePic extends StatelessWidget {
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
-      body: Center(
-        child: Hero(
-          tag: "profilePicHero",
-          child:
-              imageUrl != null
-                  ? Image.network(
+      body: SafeArea(
+        child: Center(
+          child: Hero(
+            tag: "profilePicHero",
+            child: imageUrl != null
+                ? Image.network(
                     imageUrl!,
                     fit: BoxFit.contain,
                     errorBuilder: (context, error, stackTrace) {
-                      return const Icon(
+                      return Icon(
                         Icons.error,
-                        size: 100,
+                        size: isSmallScreen ? 80 : 100,
                         color: Colors.white54,
                       );
                     },
                   )
-                  : const Icon(
+                : Icon(
                     Icons.account_circle,
-                    size: 200,
+                    size: isSmallScreen ? 150 : 200,
                     color: Colors.white54,
                   ),
+          ),
         ),
       ),
     );

@@ -58,7 +58,7 @@ class MentorFriendService {
         .eq('id', requestId);
   }
 
-  /// Get all pending requests with profile info including avatar
+  /// Get all pending requests with profile info (without email)
   Future<List<Map<String, dynamic>>> getPendingRequests() async {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return [];
@@ -66,7 +66,7 @@ class MentorFriendService {
     final res = await supabase
         .from('mentor_friend_requests')
         .select(
-          'id, sender_id, profiles!mentor_friend_requests_sender_id_fkey(id, username, email, avatar_url)',
+          'id, sender_id, profiles_new!mentor_friend_requests_sender_id_fkey(id, username, avatar_url)',
         )
         .eq('receiver_id', userId)
         .eq('status', 'pending');
@@ -74,7 +74,7 @@ class MentorFriendService {
     return List<Map<String, dynamic>>.from(res);
   }
 
-  /// Get all accepted friends with profile info including avatar
+  /// Get all accepted friends with profile info (without email)
   Future<List<Map<String, dynamic>>> getFriends() async {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return [];
@@ -86,37 +86,39 @@ class MentorFriendService {
       mentor_id,
       friend_id,
       status,
-      mentor:mentor_id (id, username, email, avatar_url),
-      friend:friend_id (id, username, email, avatar_url)
+      mentor:mentor_id (id, username, avatar_url),
+      friend:friend_id (id, username, avatar_url)
     ''')
     .or('mentor_id.eq.$userId,friend_id.eq.$userId')
     .eq('status', 'accepted');
     return List<Map<String, dynamic>>.from(res);
   }
 
-  /// Get "People You May Know" (mentors not yet friends) with avatar
+  /// Get "People You May Know" (mentors not yet friends) without email
   Future<List<Map<String, dynamic>>> getSuggestions() async {
-    final userId = supabase.auth.currentUser?.id;
-    if (userId == null) return [];
+  final currentUser = supabase.auth.currentUser;
+  if (currentUser == null) return [];
 
-    final res = await supabase.rpc(
-      'get_mentor_notfriend',
-      params: {'uid': userId},
-    );
+  return await supabase
+      .from('profiles_new')
+      .select()
+      .neq('id', currentUser.id)
+      .inFilter('role', ['mentor', 'student'])  // Include both roles
+      .limit(20);
+}
 
-    return List<Map<String, dynamic>>.from(res);
-  }
-
-  /// Search for users/mentors by username with avatar
+  /// Search for users/mentors by username without email
   Future<List<Map<String, dynamic>>> searchUsers(String query) async {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return [];
 
     final res = await supabase
-        .from('profiles')
-        .select('id, username, email, avatar_url')
+        .from('profiles_new')
+        .select('id, username, avatar_url, role, online_status')
         .ilike('username', '%$query%')
-        .neq('id', userId);
+        .neq('id', userId)
+        .eq('role', 'mentor')
+        .eq('is_approved', true);
 
     return List<Map<String, dynamic>>.from(res);
   }
@@ -125,7 +127,7 @@ class MentorFriendService {
   Future<Map<String, String>?> startChatWithFriend(String friendId) async {
     try {
       final res = await supabase
-          .from('profiles')
+          .from('profiles_new')
           .select('id, username, avatar_url')
           .eq('id', friendId)
           .maybeSingle();

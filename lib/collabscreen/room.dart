@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/services.dart';
 import 'package:codexhub01/parts/create_live_lobby.dart';
-import 'package:codexhub01/collabscreen/collab_room_tabs.dart'; // make sure this import exists
+import 'package:codexhub01/collabscreen/collab_room_tabs.dart'; 
 
 class CollabRoomScreen extends StatefulWidget {
   final String roomId;
@@ -185,7 +185,7 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
     if (userIds.isEmpty) return;
     try {
       final profiles = await supabase
-          .from('profiles')
+          .from('profiles_new')
           .select('id, username, avatar_url')
           .inFilter('id', userIds);
 
@@ -212,7 +212,7 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
 
     try {
       final profile = await supabase
-          .from('profiles')
+          .from('profiles_new')
           .select('username, avatar_url')
           .eq('id', userId)
           .maybeSingle();
@@ -238,7 +238,6 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return;
 
-    // Clear the input immediately for better UX
     setState(() {
       _messageController.clear();
     });
@@ -276,7 +275,7 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
         final String roomName = result['room_name'].toString();
         final String menteeId = result['mentee_id'].toString();
         final String mentorId = result['mentor_id'].toString();
-        final bool isMentor = false; // set according to your logic
+        final bool isMentor = false;
 
         Navigator.pushReplacement(
           // ignore: use_build_context_synchronously
@@ -293,7 +292,6 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
         );
       }
 
-      // Refresh members after invite
       await _loadMembers();
     } catch (e) {
       _showError('Failed to invite mentor: $e');
@@ -343,12 +341,13 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
   @override
   Widget build(BuildContext context) {
     final currentUserId = supabase.auth.currentUser?.id;
-
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.indigo.shade400,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
+          mainAxisSize: MainAxisSize.min, 
+          
           children: [
             Text(widget.roomName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
             GestureDetector(
@@ -387,6 +386,17 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
                 Container(
                   height: 70,
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.indigo, 
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        Colors.indigo.shade700,
+                        Colors.indigo.shade500,
+                      ],
+                    ),
+                  ),
                   child: ListView.builder(
                     scrollDirection: Axis.horizontal,
                     itemCount: _members.length,
@@ -403,13 +413,22 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
                               children: [
                                 _buildAvatar(userData, radius: 20),
                                 if (isCreator)
-                                  const Positioned(right: 0, bottom: 0, child: Icon(Icons.star, size: 10, color: Colors.blue)),
+                                  const Positioned(right: 0, bottom: 0, child: Icon(Icons.star, size: 10, color: Colors.amber)),
                               ],
                             ),
                             const SizedBox(height: 2),
                             SizedBox(
                               width: 44,
-                              child: Text(userData['name'], style: const TextStyle(fontSize: 9), overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
+                              child: Text(
+                                userData['name'], 
+                                style: const TextStyle(
+                                  fontSize: 9, 
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w500
+                                ), 
+                                overflow: TextOverflow.ellipsis, 
+                                textAlign: TextAlign.center
+                              ),
                             ),
                           ],
                         ),
@@ -501,12 +520,11 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
     if (confirm != true) return;
 
     try {
-      // Delete all related data first
+  
       await supabase.from('live_sessions').delete().eq('room_id', widget.roomId);
       await supabase.from('room_members').delete().eq('room_id', widget.roomId);
       await supabase.from('room_messages').delete().eq('room_id', widget.roomId);
 
-      // Now delete the room
       await supabase.from('rooms').delete().eq('id', widget.roomId);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Room deleted')));

@@ -5,7 +5,6 @@ import '../collabscreen/collab_room_tabs.dart';
 class CreateLiveLobby extends StatefulWidget {
   final String menteeId;
   final String menteeName;
-  
   final bool isMentor;
 
   const CreateLiveLobby({
@@ -55,8 +54,8 @@ class _CreateLiveLobbyState extends State<CreateLiveLobby> {
       return;
     }
 
-  setState(() => isLoading = true);
-  debugPrint('🟡 _createLobby: Start');
+    setState(() => isLoading = true);
+    debugPrint('🟡 _createLobby: Start');
 
     try {
       debugPrint('🟡 _createLobby: Calling createLiveSession');
@@ -115,80 +114,250 @@ class _CreateLiveLobbyState extends State<CreateLiveLobby> {
 
   @override
   Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    final isSmallScreen = screenSize.width < 600;
+    final isVerySmallScreen = screenSize.width < 400;
+    final isLandscape = screenSize.width > screenSize.height;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Invite a Mentor'),
+        title: Text(
+          'Invite a Mentor',
+          style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
+        ),
         backgroundColor: Colors.indigo,
         elevation: 2,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: mentors.isEmpty
-            ? const Center(child: CircularProgressIndicator())
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Select a Mentor:',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  DropdownButtonFormField<String>(
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: 'Choose Mentor',
-                    ),
-                    initialValue: selectedMentorId,
-                    items: mentors.map((mentor) {
-                      return DropdownMenuItem<String>(
-                        value: mentor['id'].toString(),
-                        child: Text(
-                          mentor['username'] ?? 'Unknown Mentor',
-                          style: const TextStyle(fontSize: 15),
-                        ),
-                      );
-                    }).toList(),
-                    onChanged: (value) =>
-                        setState(() => selectedMentorId = value),
-                  ),
-                  const SizedBox(height: 20),
-                  Center(
-                    child: ElevatedButton(
-                      onPressed: isLoading ? null : _createLobby,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.indigo,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 40,
-                          vertical: 12,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      child: isLoading
-                          ? const SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Text(
-                              'Invite Mentor',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                    ),
+      body: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(isSmallScreen ? 12.0 : 16.0),
+          child: mentors.isEmpty
+              ? const Center(child: CircularProgressIndicator())
+              : _buildContent(screenSize, isSmallScreen, isVerySmallScreen, isLandscape),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContent(Size screenSize, bool isSmallScreen, bool isVerySmallScreen, bool isLandscape) {
+    return SingleChildScrollView(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          minHeight: screenSize.height - 
+                    (isSmallScreen ? 150 : 200), // Account for app bar and padding
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Text(
+              'Select a Mentor:',
+              style: TextStyle(
+                fontSize: isSmallScreen ? 16 : 18,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            SizedBox(height: isSmallScreen ? 8 : 12),
+
+            // Mentor Selection
+            Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: Theme.of(context).cardColor,
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: Color.lerp(Colors.black, Colors.transparent, 0.9)!,
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
                   ),
                 ],
               ),
+              child: Padding(
+                padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Available Mentors',
+                      style: TextStyle(
+                        fontSize: isSmallScreen ? 14 : 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                    SizedBox(height: isSmallScreen ? 8 : 12),
+                    
+                    // Dropdown with improved styling
+                    DropdownButtonFormField<String>(
+                      decoration: InputDecoration(
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide(color: Colors.grey[400]!),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide(color: Colors.grey[400]!),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(color: Colors.indigo),
+                        ),
+                        filled: true,
+                        fillColor: Colors.grey[50],
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: isSmallScreen ? 12 : 16,
+                          vertical: isSmallScreen ? 14 : 16,
+                        ),
+                      ),
+                      initialValue: selectedMentorId,
+                      items: mentors.map((mentor) {
+                        return DropdownMenuItem<String>(
+                          value: mentor['id'].toString(),
+                          child: Text(
+                            mentor['username'] ?? 'Unknown Mentor',
+                            style: TextStyle(
+                              fontSize: isSmallScreen ? 14 : 15,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (value) => setState(() => selectedMentorId = value),
+                      isExpanded: true,
+                      iconSize: isSmallScreen ? 20 : 24,
+                      style: TextStyle(
+                        fontSize: isSmallScreen ? 14 : 15,
+                        color: Colors.black,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            SizedBox(height: isSmallScreen ? 16 : 24),
+
+            // Selected Mentor Info (if any)
+            if (selectedMentorId != null) _buildSelectedMentorInfo(isSmallScreen),
+
+            const Spacer(),
+
+            // Action Button
+            Center(
+              child: SizedBox( // FIXED: Use SizedBox instead of Container for layout
+                width: isVerySmallScreen ? double.infinity : null,
+                child: ElevatedButton(
+                  onPressed: isLoading ? null : _createLobby,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.indigo,
+                    foregroundColor: Colors.white,
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isSmallScreen ? 24 : 40,
+                      vertical: isSmallScreen ? 14 : 16,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    elevation: 2,
+                    minimumSize: isVerySmallScreen 
+                        ? Size(double.infinity, isSmallScreen ? 48 : 52)
+                        : Size(isSmallScreen ? 140 : 160, isSmallScreen ? 48 : 52),
+                  ),
+                  child: isLoading
+                      ? SizedBox(
+                          width: isSmallScreen ? 20 : 24,
+                          height: isSmallScreen ? 20 : 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.person_add,
+                              size: isSmallScreen ? 18 : 20,
+                            ),
+                            SizedBox(width: isSmallScreen ? 6 : 8),
+                            Flexible(
+                              child: Text(
+                                'Invite Mentor',
+                                style: TextStyle(
+                                  fontSize: isSmallScreen ? 14 : 16,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                ),
+              ),
+            ),
+
+            // Additional spacing for very small screens
+            if (isVerySmallScreen) SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSelectedMentorInfo(bool isSmallScreen) {
+    final selectedMentor = mentors.firstWhere(
+      (mentor) => mentor['id'].toString() == selectedMentorId,
+      orElse: () => {},
+    );
+
+    if (selectedMentor.isEmpty) return const SizedBox();
+
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+      decoration: BoxDecoration(
+        color: Colors.indigo.withAlpha(25),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.indigo.withAlpha(76)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.person,
+            color: Colors.indigo,
+            size: isSmallScreen ? 20 : 24,
+          ),
+          SizedBox(width: isSmallScreen ? 8 : 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Selected Mentor:',
+                  style: TextStyle(
+                    fontSize: isSmallScreen ? 12 : 14,
+                    color: Colors.grey[700],
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  selectedMentor['username'] ?? 'Unknown Mentor',
+                  style: TextStyle(
+                    fontSize: isSmallScreen ? 14 : 16,
+                    color: Colors.indigo,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

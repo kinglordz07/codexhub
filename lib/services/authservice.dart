@@ -4,172 +4,261 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AuthService {
-  final SupabaseClient _supabase = Supabase.instance.client;
+  final SupabaseClient _supabase;
 
-  // --- Current User & Session ---
+  AuthService({SupabaseClient? supabaseClient})
+      : _supabase = supabaseClient ?? Supabase.instance.client;
+
+  // 🔹 Current user & session
   User? get currentUser => _supabase.auth.currentUser;
   bool get isLoggedIn => _supabase.auth.currentSession != null;
 
-  // --- PRIVATE: Fetch role from profiles table ---
+  // 🔹 Fetch role from 'profiles_new' table
   Future<String> _fetchUserRole(User user) async {
     try {
-      final profile =
-          await _supabase
-              .from('profiles')
-              .select('role')
-              .eq('id', user.id)
-              .maybeSingle();
-      return profile?['role'] ?? 'user';
+      final profile = await _supabase
+          .from('profiles_new')
+          .select('role')
+          .eq('id', user.id)
+          .maybeSingle();
+      return profile?['role'] as String? ?? 'student';
     } catch (e) {
       debugPrint('❌ Error fetching user role: $e');
-      return 'user';
+      return 'student';
     }
   }
 
-  // --- PUBLIC: Get current user's role ---
   Future<String> getCurrentUserRole() async {
     final user = currentUser;
-    if (user == null) return 'user';
-    return await _fetchUserRole(user);
+    if (user == null) return 'student';
+    return _fetchUserRole(user);
   }
 
-  // --- SIGN UP ---
-  Future<Map<String, dynamic>> signUp({
-    required String email,
-    required String password,
-    required String username,
-    required String role, // must be 'user' or 'mentor'
-  }) async {
-    try {
-      debugPrint(
-        '➡️ Starting signup for email: $email, username: $username, role: $role',
-      );
+  // 🔹 Sign up - WITH EMAIL CONFIRMATION & ADMIN APPROVAL
+Future<Map<String, dynamic>> signUp({
+  required String email,
+  required String password,
+  String? username,
+  required String role,
+}) async {
+  try {
+    debugPrint('🎯 STARTING SIGNUP PROCESS');
+    debugPrint('📧 Email: $email');
+    debugPrint('👤 Username: $username');
+    debugPrint('🎭 Role: $role');
 
-      // 1️⃣ Create auth user first
-      final response = await _supabase.auth.signUp(
-        email: email,
-        password: password,
-      );
-      debugPrint('✅ Auth signUp response: $response');
+    // 1️⃣ Validate role
+    final validRoles = ['student', 'mentor'];
+    if (!validRoles.contains(role.toLowerCase())) {
+      return {'success': false, 'error': 'Invalid role, must be student or mentor'};
+    }
 
-      final user = response.user;
+    // 2️⃣ Ensure username
+    final safeUsername = (username != null && username.isNotEmpty)
+        ? username
+        : 'user_${DateTime.now().millisecondsSinceEpoch}';
 
-      if (user == null) {
-        debugPrint('❌ No user returned from auth.signUp()');
-        return {'success': false, 'error': 'Failed to create auth user'};
+    debugPrint('🔍 Checking for duplicate username: $safeUsername');
+    
+    // 3️⃣ Check duplicates
+    final existingUsername = await _supabase
+        .from('profiles_new')
+        .select('username')
+        .eq('username', safeUsername)
+        .maybeSingle();
+
+    if (existingUsername != null) {
+      debugPrint('❌ Username already exists');
+      return {'success': false, 'error': 'Username already exists'};
+    }
+
+    debugPrint('✅ No duplicate username found');
+
+    // 4️⃣ Create auth user - MINIMAL DEBUGGING
+    debugPrint('🔄 CREATING AUTH USER...');
+    
+    final response = await _supabase.auth.signUp(
+      email: email, 
+      password: password,
+      data: {
+        'username': safeUsername,
+        'role': role.toLowerCase(),
       }
+    );
+    
+    // ONLY use properties that definitely exist
+    final user = response.user;
+    
+    debugPrint('📦 AUTH RESPONSE SUMMARY:');
+    debugPrint('  - User Created: ${user != null ? "YES" : "NO"}');
+    debugPrint('  - User ID: ${user?.id ?? "NULL"}');
+    debugPrint('  - Session: ${response.session != null ? "EXISTS" : "NULL"}');
+    
+    if (user == null) {
+      debugPrint('❌ NO USER RETURNED FROM AUTH');
+      return {'success': false, 'error': 'Failed to create auth user'};
+    }
 
-      debugPrint('➡️ Auth user created with ID: ${user.id}');
+    debugPrint('✅ AUTH USER CREATED: ${user.id}');
+    debugPrint('📧 User email: ${user.email}');
+    debugPrint('🔐 Email confirmed: ${user.emailConfirmedAt}');
+    debugPrint('📨 Confirmation sent: ${user.confirmationSentAt}');
 
-      // ensure role is valid
-      final roleValue = role.toLowerCase();
-      if (roleValue != 'user' && roleValue != 'mentor') {
-        debugPrint('❌ Invalid role provided: $roleValue');
+    // 5️⃣ Wait and create profile
+    debugPrint('⏳ Waiting before profile creation...');
+    await Future.delayed(const Duration(seconds: 2));
+
+    final profileData = {
+      'id': user.id,
+      'username': safeUsername,
+      'role': role.toLowerCase(),
+      'is_approved': false,
+    };
+
+    debugPrint('📝 PROFILE DATA: $profileData');
+    
+    try {
+      debugPrint('🔄 CREATING PROFILE...');
+      final profileInsert = await _supabase
+          .from('profiles_new')
+          .insert(profileData)
+          .select()
+          .single();
+      
+      debugPrint('✅ PROFILE CREATED SUCCESSFULLY');
+      debugPrint('   - ID: ${profileInsert['id']}');
+      debugPrint('   - Username: ${profileInsert['username']}');
+      debugPrint('   - Role: ${profileInsert['role']}');
+      debugPrint('   - Approved: ${profileInsert['is_approved']}');
+      
+      return {
+        'success': true, 
+        'user': user, 
+        'profile': profileInsert,
+        'message': 'Account created successfully! Please check your email for verification.',
+        'userId': user.id,
+        'requiresEmailVerification': user.emailConfirmedAt == null,
+      };
+    } catch (e) {
+      debugPrint('❌ PROFILE CREATION FAILED: $e');
+      // Even if profile fails, auth user was created
+      return {
+        'success': false, 
+        'error': 'Account created but profile setup incomplete. Please check your email for verification.',
+        'partialSuccess': true,
+        'userId': user.id,
+        'requiresEmailVerification': user.emailConfirmedAt == null,
+      };
+    }
+
+  } catch (e, st) {
+    debugPrint('💥 SIGNUP EXCEPTION: $e');
+    debugPrint('📄 STACK TRACE: $st');
+    return {'success': false, 'error': 'Signup failed: $e'};
+  }
+}
+
+  // 🔹 Sign in - WITH CHECKS FOR VERIFICATION & APPROVAL
+Future<Map<String, dynamic>> signIn({
+  required String email,
+  required String password,
+}) async {
+  try {
+    final response = await _supabase.auth.signInWithPassword(email: email, password: password);
+    final user = response.user;
+    
+    if (user != null) {
+      // Check if email is verified
+      if (user.emailConfirmedAt == null) {
         return {
-          'success': false,
-          'error': 'Invalid role, must be user or mentor',
+          'success': false, 
+          'error': 'Please verify your email before logging in. Check your inbox.',
+          'requiresEmailVerification': true
         };
       }
 
-      // 2️⃣ Insert profile into `profiles` table
-      debugPrint('➡️ Inserting profile into database...');
-      final insertResponse =
-          await _supabase
-              .from('profiles')
-              .insert({
-                'id': user.id,
-                'username': username,
-                'email': email,
-                'role': roleValue,
-              })
-              .select()
-              .maybeSingle();
-      debugPrint('✅ Profile inserted: $insertResponse');
+      // Get user profile to check admin approval
+      final profile = await _supabase
+          .from('profiles_new')
+          .select('role, is_approved')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      if (profile == null) {
+        return {'success': false, 'error': 'Profile not found. Please contact support.'};
+      }
+
+      final role = profile['role'] as String? ?? 'student';
+      final isApproved = profile['is_approved'] as bool? ?? false;
+
+      // Check if user is approved by admin
+      if (!isApproved) {
+        return {
+          'success': false, 
+          'error': 'Your account is pending admin approval. Please wait for approval to access the platform.',
+          'pendingApproval': true,
+          'role': role
+        };
+      }
 
       return {
-        'success': true,
+        'success': true, 
+        'role': role, 
         'userId': user.id,
-        'role': roleValue,
-        'profile': insertResponse,
+        'isApproved': true
       };
-    } catch (e, st) {
-      debugPrint('❌ Signup caught exception: $e\n$st');
-
-      String errorMessage = e.toString();
-
-      // detect duplicate keys or role issues
-      if (errorMessage.contains('duplicate key value')) {
-        if (errorMessage.contains('username')) {
-          errorMessage = 'Username already exists';
-        } else if (errorMessage.contains('email')) {
-          errorMessage = 'Email already exists';
-        }
-        debugPrint('⚠️ Duplicate key error detected: $errorMessage');
-      } else if (errorMessage.contains('invalid input value') ||
-          errorMessage.contains('role')) {
-        errorMessage = 'Invalid role, must be user or mentor';
-        debugPrint('⚠️ Role validation error detected: $errorMessage');
-      }
-
-      return {'success': false, 'error': errorMessage};
     }
+    
+    return {'success': false, 'error': 'Login failed'};
+  } catch (e) {
+    debugPrint('❌ SignIn exception: $e');
+    return {'success': false, 'error': e.toString()};
   }
+}
 
-  // --- SIGN IN ---
-  Future<Map<String, dynamic>> signIn({
-    required String email,
-    required String password,
-  }) async {
+// 🔹 Resend email verification
+Future<Map<String, dynamic>> resendVerificationEmail(String email) async {
+  try {
+    await _supabase.auth.resend(
+      type: OtpType.signup,
+      email: email,
+    );
+    return {'success': true, 'message': 'Verification email sent to $email'};
+  } catch (e) {
+    debugPrint('❌ Error resending verification: $e');
+    return {'success': false, 'error': e.toString()};
+  }
+}
+
+  // 🔹 Send reset password OTP
+  Future<Map<String, dynamic>> sendResetOtp(String email) async {
     try {
-      final response = await _supabase.auth.signInWithPassword(
-        email: email,
-        password: password,
+      await _supabase.auth.resetPasswordForEmail(
+        email,
+        redirectTo: 'com.codexhub01://reset-callback/',
       );
-
-      final user = response.user;
-      if (user != null) {
-        final role = await _fetchUserRole(user);
-        return {'success': true, 'role': role, 'userId': user.id};
-      } else {
-        return {'success': false, 'error': 'Login failed'};
-      }
+      return {'success': true, 'message': 'OTP sent to $email'};
     } catch (e) {
+      debugPrint('❌ Error sending OTP: $e');
       return {'success': false, 'error': e.toString()};
     }
   }
 
-  Future<void> sendResetOtp(String email) async {
+  // 🔹 Update password
+  Future<Map<String, dynamic>> updatePassword({required String newPassword}) async {
     try {
-      await Supabase.instance.client.auth.resetPasswordForEmail(
-        email,
-        redirectTo: 'com.codexhub01://reset-callback/', // optional deep link
-      );
-      print('OTP sent to $email');
+      final response = await _supabase.auth.updateUser(UserAttributes(password: newPassword));
+      if (response.user == null) return {'success': false, 'error': 'Failed to update password'};
+      return {'success': true, 'message': 'Password updated successfully'};
     } catch (e) {
-      print('Error sending OTP: $e');
+      debugPrint('❌ Error updating password: $e');
+      return {'success': false, 'error': e.toString()};
     }
   }
 
-  Future<void> verifyOtpAndUpdatePassword(
-    String token,
-    String newPassword,
-  ) async {
-    final response = await Supabase.instance.client.auth.updateUser(
-      UserAttributes(password: newPassword),
-      // If using token-based reset
-      // Not needed if using deep link in app
-    );
-
-    if (response.user == null) {
-      print('Error updating password: Failed to update user password.');
-    } else {
-      print('Password updated successfully!');
-    }
-  }
-
-  // --- SIGN OUT ---
+  // 🔹 Sign out
   Future<void> signOut() async {
     await _supabase.auth.signOut();
-    debugPrint("✅ User signed out");
+    debugPrint('✅ User signed out');
   }
 }

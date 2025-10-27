@@ -14,6 +14,22 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
   List<Map<String, dynamic>> rooms = [];
   bool isLoading = false;
 
+  // Responsive layout detection
+  bool get isSmallScreen {
+    final mediaQuery = MediaQuery.of(context);
+    return mediaQuery.size.width < 600;
+  }
+
+  bool get isMediumScreen {
+    final mediaQuery = MediaQuery.of(context);
+    return mediaQuery.size.width >= 600 && mediaQuery.size.width < 1024;
+  }
+
+  bool get isLargeScreen {
+    final mediaQuery = MediaQuery.of(context);
+    return mediaQuery.size.width >= 1024;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -57,7 +73,9 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
         mentorId = session['mentor_id'] ?? '';
         menteeId = session['mentee_id'] ?? '';
       }
+      
       if (!mounted) return;
+      
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -73,14 +91,21 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error creating room: ${e.toString()}')),
+        SnackBar(
+          content: Text('Error creating room: ${e.toString()}'),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.all(isSmallScreen ? 8 : 16),
+        ),
       );
     }
   }
 
   // Fetch rooms
   Future<void> _fetchRooms() async {
-    setState(() => isLoading = true);
+    if (mounted) {
+      setState(() => isLoading = true);
+    }
+    
     try {
       final response = await supabase
           .from('rooms')
@@ -95,11 +120,17 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error fetching rooms: ${e.toString()}')),
+          SnackBar(
+            content: Text('Error fetching rooms: ${e.toString()}'),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.all(isSmallScreen ? 8 : 16),
+          ),
         );
       }
     } finally {
-      if (mounted) setState(() => isLoading = false);
+      if (mounted) {
+        setState(() => isLoading = false);
+      }
     }
   }
 
@@ -107,7 +138,11 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
     final user = supabase.auth.currentUser;
     if (user == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please sign in to join a room")),
+        SnackBar(
+          content: const Text("Please sign in to join a room"),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.all(isSmallScreen ? 8 : 16),
+        ),
       );
       return;
     }
@@ -116,22 +151,32 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text("Join Room"),
+        title: Text(
+          "Join Room",
+          style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
+        ),
         content: TextField(
           controller: roomIdController,
-          decoration: const InputDecoration(
+          decoration: InputDecoration(
             hintText: "Enter Room ID",
-            border: OutlineInputBorder(),
+            border: const OutlineInputBorder(),
+            contentPadding: EdgeInsets.all(isSmallScreen ? 12 : 16),
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text("Cancel"),
+            child: Text(
+              "Cancel",
+              style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+            ),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text("Join"),
+            child: Text(
+              "Join",
+              style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+            ),
           ),
         ],
       ),
@@ -157,8 +202,13 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
 
       if (room == null) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text("Room not found")));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text("Room not found"),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.all(isSmallScreen ? 8 : 16),
+          ),
+        );
         return;
       }
 
@@ -207,7 +257,11 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error joining room: ${e.toString()}')),
+        SnackBar(
+          content: Text('Error joining room: ${e.toString()}'),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.all(isSmallScreen ? 8 : 16),
+        ),
       );
     }
   }
@@ -216,7 +270,11 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
     final user = supabase.auth.currentUser;
     if (user == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please sign in to create a room")),
+        SnackBar(
+          content: const Text("Please sign in to create a room"),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.all(isSmallScreen ? 8 : 16),
+        ),
       );
       return;
     }
@@ -225,22 +283,32 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text("Create Room"),
+        title: Text(
+          "Create Room",
+          style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
+        ),
         content: TextField(
           controller: roomNameController,
-          decoration: const InputDecoration(
+          decoration: InputDecoration(
             hintText: "Enter room name",
-            border: OutlineInputBorder(),
+            border: const OutlineInputBorder(),
+            contentPadding: EdgeInsets.all(isSmallScreen ? 12 : 16),
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text("Cancel"),
+            child: Text(
+              "Cancel",
+              style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+            ),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text("Create"),
+            child: Text(
+              "Create",
+              style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+            ),
           ),
         ],
       ),
@@ -254,77 +322,195 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
     await _createRoom(name);
   }
 
+  Widget _buildActionButtons() {
+    if (isLargeScreen) {
+      return Row(
+        children: [
+          Expanded(
+            child: _buildCreateRoomButton(),
+          ),
+          SizedBox(width: isSmallScreen ? 12 : 16),
+          Expanded(
+            child: _buildJoinRoomButton(),
+          ),
+        ],
+      );
+    } else {
+      return Column(
+        children: [
+          _buildCreateRoomButton(),
+          SizedBox(height: isSmallScreen ? 12 : 16),
+          _buildJoinRoomButton(),
+        ],
+      );
+    }
+  }
+
+  Widget _buildCreateRoomButton() {
+    return ElevatedButton.icon(
+      onPressed: _showCreateRoomDialog,
+      icon: Icon(Icons.add, size: isSmallScreen ? 20 : 24),
+      label: Text(
+        "Create Room",
+        style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+      ),
+      style: ElevatedButton.styleFrom(
+        padding: EdgeInsets.symmetric(
+          horizontal: isSmallScreen ? 16 : 20,
+          vertical: isSmallScreen ? 12 : 16,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildJoinRoomButton() {
+    return ElevatedButton.icon(
+      onPressed: _showJoinRoomDialog,
+      icon: Icon(Icons.login, size: isSmallScreen ? 20 : 24),
+      label: Text(
+        "Join by ID",
+        style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+      ),
+      style: ElevatedButton.styleFrom(
+        padding: EdgeInsets.symmetric(
+          horizontal: isSmallScreen ? 16 : 20,
+          vertical: isSmallScreen ? 12 : 16,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRoomList() {
+    if (isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (rooms.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: EdgeInsets.all(isSmallScreen ? 16 : 24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.meeting_room_outlined,
+                size: isSmallScreen ? 48 : 64,
+                color: Colors.grey.shade400,
+              ),
+              SizedBox(height: isSmallScreen ? 12 : 16),
+              Text(
+                "No rooms available",
+                style: TextStyle(
+                  fontSize: isSmallScreen ? 16 : 18,
+                  color: Colors.grey.shade600,
+                ),
+              ),
+              SizedBox(height: isSmallScreen ? 8 : 12),
+              Text(
+                "Create one to get started!",
+                style: TextStyle(
+                  fontSize: isSmallScreen ? 14 : 16,
+                  color: Colors.grey.shade500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      itemCount: rooms.length,
+      itemBuilder: (context, index) {
+        final room = rooms[index];
+        return Card(
+          margin: EdgeInsets.only(bottom: isSmallScreen ? 8 : 12),
+          elevation: 2,
+          child: ListTile(
+            leading: Icon(
+              Icons.meeting_room,
+              size: isSmallScreen ? 24 : 28,
+              color: Colors.indigo,
+            ),
+            title: Text(
+              room['name'],
+              style: TextStyle(
+                fontSize: isSmallScreen ? 16 : 18,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            subtitle: Text(
+              "ID: ${room['id']}",
+              style: TextStyle(
+                fontSize: isSmallScreen ? 14 : 16,
+                color: Colors.grey.shade600,
+              ),
+            ),
+            trailing: IconButton(
+              icon: Icon(
+                Icons.arrow_forward,
+                size: isSmallScreen ? 20 : 24,
+              ),
+              onPressed: () => _joinRoom(room['id']),
+              tooltip: "Join Room",
+            ),
+            contentPadding: EdgeInsets.symmetric(
+              horizontal: isSmallScreen ? 16 : 20,
+              vertical: isSmallScreen ? 8 : 12,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Collaboration Lobby"),
+        backgroundColor: Colors.indigo,
+        title: Text(
+          "Collaboration Lobby",
+          style: TextStyle(
+            fontSize: isSmallScreen ? 18 : 20,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
         centerTitle: true,
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
+            icon: Icon(
+              Icons.refresh,
+              size: isSmallScreen ? 20 : 24,
+            ),
             onPressed: _fetchRooms,
             tooltip: "Refresh rooms",
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _showCreateRoomDialog,
-                    icon: const Icon(Icons.add),
-                    label: const Text("Create Room"),
-                  ),
+      body: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(isSmallScreen ? 16.0 : 24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildActionButtons(),
+              SizedBox(height: isSmallScreen ? 16 : 24),
+              const Divider(),
+              SizedBox(height: isSmallScreen ? 16 : 24),
+              Text(
+                "Available Rooms:",
+                style: TextStyle(
+                  fontSize: isSmallScreen ? 18 : 20,
+                  fontWeight: FontWeight.bold,
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _showJoinRoomDialog,
-                    icon: const Icon(Icons.login),
-                    label: const Text("Join by ID"),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            const Divider(),
-            const SizedBox(height: 16),
-            const Text(
-              "Available Rooms:",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : rooms.isEmpty
-                      ? const Center(child: Text("No rooms available. Create one!"))
-                      : ListView.builder(
-                          itemCount: rooms.length,
-                          itemBuilder: (context, index) {
-                            final room = rooms[index];
-                            return Card(
-                              margin: const EdgeInsets.only(bottom: 8),
-                              child: ListTile(
-                                leading: const Icon(Icons.meeting_room),
-                                title: Text(room['name']),
-                                subtitle: Text("ID: ${room['id']}"),
-                                trailing: IconButton(
-                                  icon: const Icon(Icons.arrow_forward),
-                                  onPressed: () => _joinRoom(room['id']),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-            ),
-          ],
+              ),
+              SizedBox(height: isSmallScreen ? 12 : 16),
+              Expanded(
+                child: _buildRoomList(),
+              ),
+            ],
+          ),
         ),
       ),
     );

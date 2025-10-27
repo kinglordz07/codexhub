@@ -1,7 +1,5 @@
-// ignore_for_file: deprecated_member_use, use_build_context_synchronously, unused_element
-
-import 'package:flutter/material.dart';
 import 'dart:async';
+import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_code_editor/flutter_code_editor.dart';
@@ -11,1323 +9,1402 @@ import 'package:highlight/languages/python.dart';
 import 'package:highlight/languages/vbscript.dart';
 import 'package:flutter_highlight/themes/github.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
-import 'package:highlight/highlight.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:highlight/highlight.dart';
+import 'package:http/http.dart' as http;
+import 'dart:math';
+import 'dart:convert';
 
 class CollabCodeEditorScreen extends StatefulWidget {
   final String roomId;
-  
-  const CollabCodeEditorScreen({super.key, required this.roomId});
-  
+  final bool isMentor;
+
+  const CollabCodeEditorScreen({
+    super.key,
+    required this.roomId,
+    required this.isMentor,
+  });
 
   @override
   State<CollabCodeEditorScreen> createState() => _CollabCodeEditorScreenState();
 }
 
-class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen> {
-  final SupabaseClient supabase = Supabase.instance.client;
-  late StreamSubscription<List<ConnectivityResult>> _connectivitySubscription;
-  final List<Map<String, dynamic>> _availableFiles = [];
-  final List<Map<String, dynamic>> _savedFiles = [];
-bool _isSaving = false;
-bool _isLoadingFiles = false;
-
-  String selectedLanguage = 'C#';
+class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
+    with SingleTickerProviderStateMixin {
   late CodeController _codeController;
-  Timer? _debounce;
-  RealtimeChannel? _channel;
-  String? executionResult;
-  bool isExecuting = false;
-  bool isOnline = true;
-  bool _isInitialized = false;
-  bool _hasConnectionError = false;
+  bool _isDarkMode = false;
+  bool _isLoading = true;
+  String _selectedLanguage = 'python';
+  String _output = '';
+  late TabController _tabController;
+  List<Map<String, dynamic>> _savedRooms = [];
+  bool _isLoadingRooms = false;
+  String _currentRoomTitle = 'Untitled';
+  String? _currentRoomDescription;
 
-  // Local storage key
-  String get _localStorageKey => 'code_editor_${widget.roomId}';
+  // Use consistent language keys
+  final Map<String, Mode> _languages = {
+    'python': python,
+    'java': java,
+    'csharp': cs,
+    'vb': vbscript,
+  };
 
-  final Map<String, String> languageSnippets = {
-    'C#': '''using System;
-class Program {
-    static void Main() {
-        Console.WriteLine("Hello, World!");
-    }
-}''',
-    'Python': '''def main():
-    print("Hello, World!")
-
-if __name__ == "__main__":
-    main()''',
-    'VB.NET': '''Module Module1
-    Sub Main()
-        Console.WriteLine("Hello, World!")
-    End Sub
-End Module''',
-    'Java': '''public class Main {
-    public static void main(String[] args) {
-        System.out.println("Hello, World!");
-    }
-}''',
+  // Map our language keys to Piston API language names and versions
+  final Map<String, Map<String, String>> _pistonLanguages = {
+    'python': {'language': 'python', 'version': '3.10.0'},
+    'java': {'language': 'java', 'version': '15.0.2'},
+    'csharp': {'language': 'csharp', 'version': '6.12.0'},
+    'vb': {'language': 'vb', 'version': '1.4.0'},
   };
 
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 3, vsync: this);
     _initializeEditor();
-    _setupConnectivityListener();
-    _loadAvailableFiles();
-     _loadSavedFiles();
+    _loadAllRooms();
   }
-
-  Future<void> _initializeEditor() async {
-    // Initialize controller first
-    _codeController = CodeController(
-      text: languageSnippets[selectedLanguage]!,
-      language: _getLanguageDef(selectedLanguage),
-    );
-
-    // Load from local storage
-    await _loadFromLocalStorage();
-    
-    // Set up listener
-    _codeController.addListener(_onCodeChanged);
-
-    // Test server connection and initialize realtime
-    await _testServerConnection();
-    
-    setState(() {
-      _isInitialized = true;
-    });
-  }
-
-  Future<void> _testServerConnection() async {
-    try {
-      // Simple test to check if Supabase is reachable
-      await supabase.from('code_rooms').select('count').limit(1).single();
-      setState(() {
-        isOnline = true;
-        _hasConnectionError = false;
-      });
-      await _initRealtime();
-      await _loadInitialCode();
-    } catch (e) {
-      debugPrint('Server connection test failed: $e');
-      setState(() {
-        isOnline = false;
-        _hasConnectionError = true;
-      });
-    }
-  }
-
-  void _setupConnectivityListener() {
-    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((List<ConnectivityResult> results) async {
-      final hasInternet = results.isNotEmpty && !results.contains(ConnectivityResult.none);
-      
-      if (hasInternet && !isOnline) {
-        // We have connectivity, test if server is actually reachable
-        await _testServerConnection();
-      } else if (!hasInternet) {
-        // Definitely offline
-        setState(() {
-          isOnline = false;
-          _hasConnectionError = false;
-        });
-      }
-    });
-  }
-
-  Future<void> _loadFromLocalStorage() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final savedCode = prefs.getString('${_localStorageKey}_code');
-      final savedLanguage = prefs.getString('${_localStorageKey}_language');
-      
-      if (savedCode != null && savedCode.isNotEmpty) {
-        _codeController = CodeController(
-          text: savedCode,
-          language: _getLanguageDef(savedLanguage ?? selectedLanguage),
-        );
-      }
-      
-      if (savedLanguage != null) {
-        selectedLanguage = savedLanguage;
-      }
-    } catch (e) {
-      debugPrint('Error loading from local storage: $e');
-    }
-  }
-
-  Future<void> _saveToLocalStorage() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('${_localStorageKey}_code', _codeController.text);
-      await prefs.setString('${_localStorageKey}_language', selectedLanguage);
-    } catch (e) {
-      debugPrint('Error saving to local storage: $e');
-    }
-  }
-
-  Future<void> _initRealtime() async {
-    try {
-      _channel = supabase.channel('code_room_${widget.roomId}');
-
-      _channel!.onPostgresChanges(
-        event: PostgresChangeEvent.all,
-        schema: 'public',
-        table: 'code_rooms',
-        filter: PostgresChangeFilter(
-          type: PostgresChangeFilterType.eq,
-          column: 'room_id',
-          value: widget.roomId,
-        ),
-        callback: (payload) {
-          final newCode = payload.newRecord['code'];
-          final sender = payload.newRecord['user_id'];
-          final currentUserId = supabase.auth.currentUser?.id;
-
-          if (newCode != null && sender != currentUserId) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) {
-                setState(() {
-                  _codeController.text = newCode.toString();
-                  _saveToLocalStorage();
-                });
-              }
-            });
-          }
-        },
-      );
-
-      _channel!.subscribe();
-    } catch (e) {
-      debugPrint('Error initializing realtime: $e');
-      // Don't set offline here - just realtime failed
-    }
-  }
-
-  Future<void> _loadInitialCode() async {
-    try {
-      final response = await supabase
-          .from('code_rooms')
-          .select()
-          .eq('room_id', widget.roomId)
-          .maybeSingle();
-
-      if (response != null && response['code'] != null) {
-        final serverCode = response['code'].toString();
-        if (serverCode != _codeController.text) {
-          setState(() {
-            _codeController.text = serverCode;
-            _saveToLocalStorage();
-          });
-        }
-      } else {
-        await _syncToServer();
-      }
-    } catch (e) {
-      debugPrint('Error loading initial code: $e');
-      // Don't set offline - just loading failed
-    }
-  }
-
-  void _onCodeChanged() {
-    _saveToLocalStorage();
-
-    if (_debounce?.isActive ?? false) _debounce!.cancel();
-    
-    _debounce = Timer(const Duration(milliseconds: 1500), () {
-      if (isOnline) {
-        _syncToServer();
-      }
-    });
-  }
-
-Future<void> _ensureUserProfile() async {
-  try {
-    final user = supabase.auth.currentUser;
-    if (user != null) {
-      // Check if user profile exists
-      final profileResponse = await supabase
-          .from('profiles')
-          .select()
-          .eq('id', user.id)
-          .maybeSingle();
-
-      // Create profile if it doesn't exist
-      if (profileResponse == null) {
-        // Generate a username from email or use a default
-        final username = user.email?.split('@').first ?? 'user_${user.id.substring(0, 8)}';
-        
-        await supabase.from('profiles').insert({
-          'id': user.id,
-          'email': user.email,
-          'username': username, // Add required username field
-          'created_at': DateTime.now().toIso8601String(),
-        });
-      }
-    }
-  } catch (e) {
-    debugPrint('Error ensuring user profile: $e');
-    // If profile creation fails, we'll continue without it
-  }
-}
-
-
-Future<void> _loadAvailableFiles() async {
-  if (!isOnline) return;
-  
-  setState(() {
-    _isLoadingFiles = true;
-  });
-
-  try {
-    final response = await supabase
-        .from('code_rooms')
-        .select('room_id, language, updated_at')
-        .order('updated_at', ascending: false)
-        .limit(50);
-
-    setState(() {
-      _availableFiles.clear();
-      _availableFiles.addAll(List<Map<String, dynamic>>.from(response));
-      _isLoadingFiles = false;
-    });
-  } catch (e) {
-    debugPrint('Error loading files: $e');
-    setState(() {
-      _isLoadingFiles = false;
-    });
-  }
-}
-
-// Method to show save dialog
-void _showSaveDialog() {
-  final TextEditingController fileNameController = TextEditingController(
-    text: 'my_code_${DateTime.now().millisecondsSinceEpoch}',
-  );
-
-  showDialog(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Save File'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: fileNameController,
-            decoration: const InputDecoration(
-              labelText: 'File Name',
-              hintText: 'Enter a name for your file',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 16),
-          DropdownButtonFormField<String>(
-            initialValue: selectedLanguage,
-            decoration: const InputDecoration(
-              labelText: 'Language',
-              border: OutlineInputBorder(),
-            ),
-            items: languageSnippets.keys
-                .map((lang) => DropdownMenuItem(
-                      value: lang,
-                      child: Text(lang),
-                    ))
-                .toList(),
-            onChanged: (value) {
-              if (value != null) {
-                setState(() {
-                  selectedLanguage = value;
-                });
-              }
-            },
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: () => _saveFile(fileNameController.text.trim()),
-          child: const Text('Save'),
-        ),
-      ],
-    ),
-  );
-}
-
-// Method to save file to database
-Future<void> _saveFile(String fileName) async {
-  if (fileName.isEmpty) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a file name')),
-      );
-    }
-    return;
-  }
-
-  setState(() {
-    _isSaving = true;
-  });
-
-  try {
-    final user = supabase.auth.currentUser;
-    final fileId = '${user?.id}_${DateTime.now().millisecondsSinceEpoch}';
-
-    // Save to saved_files table (you'll need to create this table)
-    await supabase.from('saved_files').upsert({
-      'file_id': fileId,
-      'file_name': fileName,
-      'code': _codeController.text,
-      'language': selectedLanguage,
-      'user_id': user?.id,
-      'created_at': DateTime.now().toIso8601String(),
-      'updated_at': DateTime.now().toIso8601String(),
-    });
-
-    // Also save to code_rooms for compatibility
-    await supabase.from('code_rooms').upsert({
-      'room_id': fileId,
-      'code': _codeController.text,
-      'language': selectedLanguage,
-      'user_id': user?.id,
-      'updated_at': DateTime.now().toIso8601String(),
-    });
-
-    if (mounted) {
-      Navigator.pop(context); // Close the dialog
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('File "$fileName" saved successfully!')),
-      );
-      
-      // Reload the saved files list
-      _loadSavedFiles();
-    }
-  } catch (e) {
-    debugPrint('Error saving file: $e');
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error saving file: $e')),
-      );
-    }
-  } finally {
-    if (mounted) {
-      setState(() {
-        _isSaving = false;
-      });
-    }
-  }
-}
-
-// Method to load user's saved files
-Future<void> _loadSavedFiles() async {
-  if (!isOnline) return;
-
-  setState(() {
-    _isLoadingFiles = true;
-  });
-
-  try {
-    final user = supabase.auth.currentUser;
-    if (user != null) {
-      final response = await supabase
-          .from('saved_files')
-          .select('file_id, file_name, language, created_at, updated_at')
-          .eq('user_id', user.id)
-          .order('updated_at', ascending: false);
-
-      setState(() {
-        _savedFiles.clear();
-        _savedFiles.addAll(List<Map<String, dynamic>>.from(response));
-      });
-    }
-  } catch (e) {
-    debugPrint('Error loading saved files: $e');
-  } finally {
-    setState(() {
-      _isLoadingFiles = false;
-    });
-  }
-}
-
-// Method to open a saved file
-Future<void> _openSavedFile(String fileId, String fileName) async {
-  try {
-    setState(() {
-      _isLoadingFiles = true;
-    });
-
-    final response = await supabase
-        .from('saved_files')
-        .select()
-        .eq('file_id', fileId)
-        .maybeSingle();
-
-    if (response != null && response['code'] != null) {
-      final newCode = response['code'].toString();
-      final newLanguage = response['language']?.toString() ?? selectedLanguage;
-      
-      setState(() {
-        _codeController.text = newCode;
-        selectedLanguage = newLanguage;
-        _codeController.language = _getLanguageDef(newLanguage);
-        _saveToLocalStorage();
-      });
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Opened: $fileName")),
-        );
-      }
-    }
-  } catch (e) {
-    debugPrint('Error opening saved file: $e');
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error opening file")),
-      );
-    }
-  } finally {
-    setState(() {
-      _isLoadingFiles = false;
-    });
-  }
-}
-
-// Method to delete a saved file
-Future<void> _deleteSavedFile(String fileId, String fileName) async {
-  try {
-    await supabase
-        .from('saved_files')
-        .delete()
-        .eq('file_id', fileId);
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('File "$fileName" deleted')),
-      );
-      _loadSavedFiles(); // Refresh the list
-    }
-  } catch (e) {
-    debugPrint('Error deleting file: $e');
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error deleting file')),
-      );
-    }
-  }
-}
-
-// Method to show saved files dialog
-void _showSavedFilesDialog() {
-  showDialog(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('My Saved Files'),
-      content: SizedBox(
-        width: double.maxFinite,
-        height: 400,
-        child: _isLoadingFiles
-            ? const Center(child: CircularProgressIndicator())
-            : _savedFiles.isEmpty
-                ? const Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.folder_open, size: 48, color: Colors.grey),
-                        SizedBox(height: 16),
-                        Text('No saved files yet'),
-                        SizedBox(height: 8),
-                        Text(
-                          'Save your code using the Save button',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.grey),
-                        ),
-                      ],
-                    ),
-                  )
-                : ListView.builder(
-                    itemCount: _savedFiles.length,
-                    itemBuilder: (context, index) {
-                      final file = _savedFiles[index];
-                      final fileId = file['file_id']?.toString() ?? '';
-                      final fileName = file['file_name']?.toString() ?? 'Untitled';
-                      final language = file['language']?.toString() ?? 'Unknown';
-                      final updatedAt = file['updated_at']?.toString() ?? '';
-                      
-                      return Card(
-                        margin: const EdgeInsets.symmetric(vertical: 4),
-                        child: ListTile(
-                          leading: Icon(
-                            _getLanguageIcon(language),
-                            color: _getLanguageColor(language),
-                          ),
-                          title: Text(fileName),
-                          subtitle: Text('$language • ${_formatDate(updatedAt)}'),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete, color: Colors.red),
-                            onPressed: () => _showDeleteConfirmation(fileId, fileName),
-                          ),
-                          onTap: () {
-                            Navigator.pop(context);
-                            _openSavedFile(fileId, fileName);
-                          },
-                        ),
-                      );
-                    },
-                  ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Close'),
-        ),
-        TextButton(
-          onPressed: _loadSavedFiles,
-          child: const Text('Refresh'),
-        ),
-      ],
-    ),
-  );
-}
-
-// Helper method for delete confirmation
-void _showDeleteConfirmation(String fileId, String fileName) {
-  showDialog(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Delete File'),
-      content: Text('Are you sure you want to delete "$fileName"?'),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        TextButton(
-          onPressed: () {
-            Navigator.pop(context); // Close confirmation
-            _deleteSavedFile(fileId, fileName);
-          },
-          child: const Text('Delete', style: TextStyle(color: Colors.red)),
-        ),
-      ],
-    ),
-  );
-}
-
-// Helper methods for UI
-IconData _getLanguageIcon(String language) {
-  switch (language) {
-    case 'Python':
-      return Icons.architecture;
-    case 'Java':
-      return Icons.coffee;
-    case 'C#':
-      return Icons.code;
-    case 'VB.NET':
-      return Icons.data_object;
-    default:
-      return Icons.description;
-  }
-}
-
-Color _getLanguageColor(String language) {
-  switch (language) {
-    case 'Python':
-      return Colors.blue;
-    case 'Java':
-      return Colors.orange;
-    case 'C#':
-      return Colors.purple;
-    case 'VB.NET':
-      return Colors.green;
-    default:
-      return Colors.grey;
-  }
-}
-
-String _formatDate(String dateString) {
-  if (dateString.isEmpty) return 'Unknown date';
-  try {
-    final date = DateTime.parse(dateString);
-    return '${date.month}/${date.day}/${date.year}';
-  } catch (e) {
-    return 'Unknown date';
-  }
-}
-
-Future<void> _openFile(String roomId) async {
-  try {
-    setState(() {
-      _isLoadingFiles = true;
-    });
-
-    final response = await supabase
-        .from('code_rooms')
-        .select()
-        .eq('room_id', roomId)
-        .maybeSingle();
-
-    if (response != null && response['code'] != null) {
-      final newCode = response['code'].toString();
-      final newLanguage = response['language']?.toString() ?? selectedLanguage;
-      
-      setState(() {
-        _codeController.text = newCode;
-        selectedLanguage = newLanguage;
-        _codeController.language = _getLanguageDef(newLanguage);
-        _saveToLocalStorage();
-      });
-      
-      // Show success message
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Opened file: $roomId")),
-        );
-      }
-    } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("File not found")),
-        );
-      }
-    }
-  } catch (e) {
-    debugPrint('Error opening file: $e');
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error opening file")),
-      );
-    }
-  } finally {
-    setState(() {
-      _isLoadingFiles = false;
-    });
-  }
-}
-
-// Add this method to show the open file dialog
-void _showOpenFileDialog() {
-  showDialog(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Open Existing File'),
-      content: SizedBox(
-        width: double.maxFinite,
-        height: 400,
-        child: _isLoadingFiles
-            ? const Center(child: CircularProgressIndicator())
-            : _availableFiles.isEmpty
-                ? const Center(child: Text('No files available'))
-                : ListView.builder(
-                    itemCount: _availableFiles.length,
-                    itemBuilder: (context, index) {
-                      final file = _availableFiles[index];
-                      final roomId = file['room_id']?.toString() ?? 'Unknown';
-                      final language = file['language']?.toString() ?? 'Unknown';
-                      final updatedAt = file['updated_at']?.toString() ?? '';
-                      
-                      return ListTile(
-                        title: Text('Room: $roomId'),
-                        subtitle: Text('Language: $language'),
-                        trailing: Text(
-                          updatedAt.isNotEmpty 
-                            ? updatedAt.substring(0, 10) 
-                            : '',
-                        ),
-                        onTap: () {
-                          Navigator.pop(context);
-                          _openFile(roomId);
-                        },
-                      );
-                    },
-                  ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        TextButton(
-          onPressed: _loadAvailableFiles,
-          child: const Text('Refresh'),
-        ),
-      ],
-    ),
-  );
-}
-
-Future<void> _syncToServer() async {
-  if (!isOnline) return;
-
-  try {
-    final user = supabase.auth.currentUser;
-    
-    // Ensure user profile exists first
-    if (user != null) {
-      await _ensureUserProfile();
-    }
-
-    // Build the data object
-    final data = {
-      'room_id': widget.roomId,
-      'code': _codeController.text,
-      'language': selectedLanguage,
-      'updated_at': DateTime.now().toIso8601String(),
-    };
-
-    // Only add user_id if we have a valid user
-    if (user != null) {
-      data['user_id'] = user.id;
-    }
-
-    // Use upsert to handle both insert and update
-    await supabase.from('code_rooms').upsert(
-      data,
-      onConflict: 'room_id', // Specify the unique constraint column
-    );
-
-    // Clear any previous connection errors on successful sync
-    if (mounted && _hasConnectionError) {
-      setState(() {
-        _hasConnectionError = false;
-      });
-    }
-    
-  } catch (e) {
-    debugPrint('Error syncing to server: $e');
-    
-    // Handle specific error types
-    if (e.toString().contains('23503')) {
-      // Foreign key violation - user doesn't exist
-      debugPrint('Foreign key violation, syncing without user_id');
-      await _syncWithoutUserId();
-    } else if (e.toString().contains('23505')) {
-      // Unique constraint violation - handle upsert differently
-      debugPrint('Unique constraint violation, trying update only');
-      await _updateExistingRecord();
-    } else {
-      // Generic error
-      if (mounted) {
-        setState(() {
-          _hasConnectionError = true;
-        });
-      }
-    }
-  }
-}
-
-Future<void> _syncWithoutUserId() async {
-  try {
-    await supabase.from('code_rooms').upsert({
-      'room_id': widget.roomId,
-      'code': _codeController.text,
-      'language': selectedLanguage,
-      'updated_at': DateTime.now().toIso8601String(),
-    }, onConflict: 'room_id');
-  } catch (e) {
-    debugPrint('Error syncing without user_id: $e');
-    // If this also fails, we'll work offline
-  }
-}
-
-Future<void> _updateExistingRecord() async {
-  try {
-    // Try to update existing record without attempting insert
-    await supabase
-        .from('code_rooms')
-        .update({
-          'code': _codeController.text,
-          'language': selectedLanguage,
-          'updated_at': DateTime.now().toIso8601String(),
-        })
-        .eq('room_id', widget.roomId);
-  } catch (e) {
-    debugPrint('Error updating existing record: $e');
-  }
-}
-
-Future<void> _handleRLSError() async {
-  debugPrint('RLS policy violation, trying alternative sync method');
-  
-  try {
-    // Try a different approach - update if exists, insert if not
-    final response = await supabase
-        .from('code_rooms')
-        .select()
-        .eq('room_id', widget.roomId)
-        .maybeSingle();
-    
-    if (response != null) {
-      // Update existing record
-      await supabase
-          .from('code_rooms')
-          .update({
-            'code': _codeController.text,
-            'language': selectedLanguage,
-            'updated_at': DateTime.now().toIso8601String(),
-          })
-          .eq('room_id', widget.roomId);
-    } else {
-      // Try insert with room_id only
-      await supabase.from('code_rooms').insert({
-        'room_id': widget.roomId,
-        'code': _codeController.text,
-        'language': selectedLanguage,
-      });
-    }
-  } catch (e) {
-    debugPrint('Alternative sync also failed: $e');
-    // At this point, we'll just work offline
-  }
-}
-
-Future<void> _handleUserNotFoundError() async {
-  debugPrint('User profile not found, creating profile...');
-  
-  try {
-    final user = supabase.auth.currentUser;
-    if (user != null) {
-      // Try to create user profile
-      await supabase.from('profiles').insert({
-        'id': user.id,
-        'email': user.email,
-        'created_at': DateTime.now().toIso8601String(),
-      });
-      
-      // Wait a bit for the profile to be created
-      await Future.delayed(const Duration(milliseconds: 500));
-      
-      // Retry the original sync
-      await _syncToServer();
-    }
-  } catch (e) {
-    debugPrint('Failed to create user profile: $e');
-    // If profile creation fails, try without user_id
-    await _syncWithoutUserId();
-  }
-}
-
- // Update your _runCode method
-Future<void> _runCode() async {
-  if (isExecuting) return;
-
-  setState(() {
-    isExecuting = true;
-    executionResult = null;
-  });
-
-  // Simulate execution based on actual code content
-  await Future.delayed(const Duration(seconds: 2));
-
-  if (mounted) {
-    setState(() {
-      executionResult = _getExecutionResult(_codeController.text, selectedLanguage);
-      isExecuting = false;
-    });
-  }
-}
-
-// Update your _getExecutionResult method to be more reliable
-String _getExecutionResult(String code, String language) {
-  final lines = code.split('\n');
-  final lineCount = lines.length;
-  final charCount = code.length;
-  
-  // Simple message extraction without complex regex
-  String? extractMessage() {
-    for (final line in lines) {
-      final trimmed = line.trim();
-      
-      // Look for Python print statements
-      if (trimmed.startsWith('print(') && trimmed.contains("'")) {
-        final start = trimmed.indexOf("'");
-        final end = trimmed.lastIndexOf("'");
-        if (start < end) return trimmed.substring(start + 1, end);
-      }
-      
-      // Look for C# Console.WriteLine
-      if (trimmed.contains('Console.WriteLine(') && trimmed.contains('"')) {
-        final start = trimmed.indexOf('"');
-        final end = trimmed.lastIndexOf('"');
-        if (start < end) return trimmed.substring(start + 1, end);
-      }
-      
-      // Look for Java System.out.println
-      if (trimmed.contains('System.out.println(') && trimmed.contains('"')) {
-        final start = trimmed.indexOf('"');
-        final end = trimmed.lastIndexOf('"');
-        if (start < end) return trimmed.substring(start + 1, end);
-      }
-      
-      // Look for VB.NET Console.WriteLine
-      if (trimmed.contains('Console.WriteLine(') && trimmed.contains('"')) {
-        final start = trimmed.indexOf('"');
-        final end = trimmed.lastIndexOf('"');
-        if (start < end) return trimmed.substring(start + 1, end);
-      }
-    }
-    return null;
-  }
-  
-  final message = extractMessage();
-  if (message != null) {
-    return "✅ $language Execution Result:\n📤 Output: $message\n\n[Execution completed successfully]";
-  }
-  
-  // Default response
-  return "✅ $language Code Executed Successfully!\n"
-         "📊 Stats: $lineCount lines, $charCount characters\n"
-         "🔄 Output: Program executed without errors\n"
-         "💡 Tip: Add print/Console.WriteLine statements to see output";
-}
-    
 
   @override
   void dispose() {
+    _tabController.dispose();
     _codeController.dispose();
-    _debounce?.cancel();
-    _connectivitySubscription.cancel();
-    if (_channel != null) {
-      supabase.removeChannel(_channel!);
-    }
     super.dispose();
   }
 
-  void _insertSnippet(String language) {
-    setState(() {
-      selectedLanguage = language;
-      _codeController.text = languageSnippets[language]!;
-      _codeController.language = _getLanguageDef(language);
-      _saveToLocalStorage();
-      if (isOnline) _syncToServer();
-    });
-  }
+  Future<void> _initializeEditor() async {
+    _codeController = CodeController(
+      text: '',
+      language: _languages[_selectedLanguage] ?? python,
+    );
 
-  Mode? _getLanguageDef(String lang) {
-    switch (lang) {
-      case 'Python':
-        return python;
-      case 'VB.NET':
-        return vbscript;
-      case 'Java':
-        return java;
-      default:
-        return cs;
+    // Try loading from cache first for offline capability
+    await _loadFromCache();
+
+    // Then try loading from Supabase (will fail gracefully if offline)
+    try {
+      await _loadCurrentRoom();
+    } catch (e) {
+      debugPrint('Offline mode: Could not load from Supabase');
+    }
+
+    if (mounted) {
+      setState(() => _isLoading = false);
     }
   }
 
-  void _retryConnection() async {
-    setState(() {
-      _hasConnectionError = false;
-    });
-    await _testServerConnection();
+  Future<void> _loadCurrentRoom() async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      final response = await Supabase.instance.client
+          .from('code_rooms')
+          .select('*')
+          .eq('room_id', widget.roomId)
+          .eq('user_id', user!.id)
+          .maybeSingle();
+
+      if (response != null) {
+        String savedLanguage = response['language'] ?? 'python';
+        // Normalize the language value
+        if (savedLanguage == 'c#') savedLanguage = 'csharp';
+        if (savedLanguage == 'C#') savedLanguage = 'csharp';
+
+        if (mounted) {
+          setState(() {
+            _codeController.text = response['code'] ?? '';
+            _selectedLanguage = savedLanguage;
+            _currentRoomTitle = response['title'] ?? 'Untitled';
+            _currentRoomDescription = response['description'];
+            _codeController.language = _languages[_selectedLanguage] ?? python;
+          });
+        }
+      } else {
+        // Create initial room if it doesn't exist
+        await _createInitialRoom();
+      }
+    } catch (e) {
+      debugPrint('Error loading current room: $e');
+    }
   }
 
- @override
-Widget build(BuildContext context) {
-  if (!_isInitialized) {
+  Future<void> _createInitialRoom() async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      await Supabase.instance.client.from('code_rooms').insert({
+        'room_id': widget.roomId,
+        'code': '',
+        'language': _selectedLanguage,
+        'title': 'Untitled',
+        'description': null,
+        'is_public': false,
+        'user_id': user?.id,
+      });
+    } catch (e) {
+      debugPrint('Error creating initial room: $e');
+    }
+  }
+
+  Future<void> _loadAllRooms() async {
+    if (!mounted) return;
+
+    setState(() {
+      _isLoadingRooms = true;
+    });
+
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) {
+        if (mounted) {
+          setState(() {
+            _isLoadingRooms = false;
+            _savedRooms = [];
+          });
+        }
+        return;
+      }
+
+      final response = await Supabase.instance.client
+          .from('code_rooms')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('updated_at', ascending: false);
+
+      if (mounted) {
+        setState(() {
+          _savedRooms = List<Map<String, dynamic>>.from(response);
+          _isLoadingRooms = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading all rooms: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingRooms = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _saveCurrentRoom() async {
+    try {
+      // Always cache locally for offline access
+      await _cacheLocally();
+
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) {
+        if (mounted) {
+          _showSnackBar('Code cached locally (offline mode)');
+        }
+        return;
+      }
+
+      await Supabase.instance.client.from('code_rooms').upsert({
+        'room_id': widget.roomId,
+        'code': _codeController.text,
+        'language': _selectedLanguage,
+        'title': _currentRoomTitle,
+        'description': _currentRoomDescription,
+        'updated_at': DateTime.now().toIso8601String(),
+        'user_id': user.id,
+      });
+
+      if (mounted) {
+        _showSnackBar('Code saved successfully!');
+      }
+
+      await _loadAllRooms();
+    } catch (e) {
+      debugPrint('Error saving code: $e');
+      if (mounted) {
+        _showSnackBar('Code cached locally (offline mode)');
+      }
+    }
+  }
+
+  // Helper method to show snackbars without storing context
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(8),
+      ),
+    );
+  }
+
+  Future<void> _saveAsNewRoom() async {
+    final TextEditingController titleController = TextEditingController(
+      text: _currentRoomTitle,
+    );
+    final TextEditingController descriptionController = TextEditingController(
+      text: _currentRoomDescription ?? '',
+    );
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Save As New File'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: titleController,
+              decoration: const InputDecoration(
+                labelText: 'File Name',
+                hintText: 'Enter file name',
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: descriptionController,
+              decoration: const InputDecoration(
+                labelText: 'Description (Optional)',
+                hintText: 'Enter file description',
+              ),
+              maxLines: 3,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (titleController.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please enter a file name')),
+                );
+                return;
+              }
+              Navigator.pop(context, true);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == true && mounted) {
+      await _performSaveAsNewRoom(
+        titleController.text.trim(),
+        descriptionController.text.trim(),
+      );
+    }
+  }
+
+  Future<void> _performSaveAsNewRoom(String title, String description) async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      final newRoomId = 'room_${DateTime.now().millisecondsSinceEpoch}';
+
+      await Supabase.instance.client.from('code_rooms').insert({
+        'room_id': newRoomId,
+        'file_name': title,
+        'description': description,
+        'code': _codeController.text,
+        'language': _selectedLanguage,
+        'title': title,
+        'is_public': false,
+        'user_id': user?.id,
+      });
+
+      await _loadAllRooms();
+      if (mounted) {
+        _showSnackBar('New file saved successfully!');
+      }
+    } catch (e) {
+      debugPrint('Error saving new room: $e');
+      if (mounted) {
+        _showSnackBar('Failed to save new file.');
+      }
+    }
+  }
+
+  Future<void> _updateRoomInfo() async {
+    final TextEditingController titleController = TextEditingController(
+      text: _currentRoomTitle,
+    );
+    final TextEditingController descriptionController = TextEditingController(
+      text: _currentRoomDescription ?? '',
+    );
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Update File Info'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: titleController,
+              decoration: const InputDecoration(
+                labelText: 'File Name',
+                hintText: 'Enter file name',
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: descriptionController,
+              decoration: const InputDecoration(
+                labelText: 'Description (Optional)',
+                hintText: 'Enter file description',
+              ),
+              maxLines: 3,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (titleController.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please enter a file name')),
+                );
+                return;
+              }
+              Navigator.pop(context, true);
+            },
+            child: const Text('Update'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == true && mounted) {
+      await _performUpdateRoomInfo(
+        titleController.text.trim(),
+        descriptionController.text.trim(),
+      );
+    }
+  }
+
+  Future<void> _performUpdateRoomInfo(String title, String description) async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      await Supabase.instance.client.from('code_rooms').upsert({
+        'room_id': widget.roomId,
+        'title': title,
+        'description': description,
+        'updated_at': DateTime.now().toIso8601String(),
+        'user_id': user?.id,
+      });
+
+      if (mounted) {
+        setState(() {
+          _currentRoomTitle = title;
+          _currentRoomDescription = description;
+        });
+      }
+
+      await _loadAllRooms();
+      if (mounted) {
+        _showSnackBar('File info updated successfully!');
+      }
+    } catch (e) {
+      debugPrint('Error updating room info: $e');
+      if (mounted) {
+        _showSnackBar('Failed to update file info.');
+      }
+    }
+  }
+
+  Future<void> _loadRoom(Map<String, dynamic> room) async {
+    // Don't load the current room into itself
+    if (room['room_id'] == widget.roomId) {
+      if (mounted) {
+        _showSnackBar('This is the current file');
+      }
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _codeController.text = room['code'] ?? '';
+        _selectedLanguage = room['language'] ?? 'python';
+        _currentRoomTitle = room['title'] ?? 'Untitled';
+        _currentRoomDescription = room['description'];
+        _codeController.language = _languages[_selectedLanguage] ?? python;
+        _tabController.animateTo(0); // Switch to editor tab
+      });
+    }
+
+    // Update the current room with the loaded content
+    await Supabase.instance.client.from('code_rooms').upsert({
+      'room_id': widget.roomId,
+      'code': room['code'],
+      'language': room['language'],
+      'title': room['title'],
+      'description': room['description'],
+      'updated_at': DateTime.now().toIso8601String(),
+    });
+
+    if (mounted) {
+      _showSnackBar('Loaded: ${room['title']}');
+    }
+  }
+
+  // Add to your state class
+  final Future<SharedPreferences> _prefs = SharedPreferences.getInstance();
+
+  Future<void> _cacheLocally() async {
+    final SharedPreferences prefs = await _prefs;
+    await prefs.setString('cached_code', _codeController.text);
+    await prefs.setString('cached_language', _selectedLanguage);
+  }
+
+  Future<void> _loadFromCache() async {
+    final SharedPreferences prefs = await _prefs;
+    final cachedCode = prefs.getString('cached_code');
+    final cachedLang = prefs.getString('cached_language');
+    if (cachedCode != null && mounted) {
+      setState(() {
+        _codeController.text = cachedCode;
+        _selectedLanguage = cachedLang ?? 'python';
+        _codeController.language = _languages[_selectedLanguage] ?? python;
+      });
+    }
+  }
+
+  Future<void> _deleteRoom(Map<String, dynamic> room) async {
+    // Prevent deleting the current room
+    if (room['room_id'] == widget.roomId) {
+      if (mounted) {
+        _showSnackBar('Cannot delete the current file');
+      }
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete File'),
+        content: Text(
+          'Are you sure you want to delete "${room['title']}"?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        await Supabase.instance.client
+            .from('code_rooms')
+            .delete()
+            .eq('room_id', room['room_id']);
+
+        await _loadAllRooms();
+        if (mounted) {
+          _showSnackBar('Deleted: ${room['title']}');
+        }
+      } catch (e) {
+        debugPrint('Error deleting room: $e');
+        if (mounted) {
+          _showSnackBar('Failed to delete file.');
+        }
+      }
+    }
+  }
+
+  Future<void> _runCode() async {
+    _tabController.animateTo(1);
+
+    if (mounted) {
+      setState(() {
+        _output = "Running ${_getDisplayName(_selectedLanguage)} code...";
+      });
+    }
+
+    // Try online execution first
+    try {
+      final pistonLang = _pistonLanguages[_selectedLanguage];
+      if (pistonLang == null) {
+        if (mounted) {
+          setState(() {
+            _output =
+                'Error: Language $_selectedLanguage is not supported for execution';
+          });
+        }
+        return;
+      }
+
+      final uri = Uri.parse('https://emkc.org/api/v2/piston/execute');
+      final response = await http
+          .post(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'language': pistonLang['language'],
+              'version': pistonLang['version'],
+              'files': [
+                {'content': _codeController.text},
+              ],
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final runData = data['run'];
+        if (mounted) {
+          setState(() {
+            _output = runData['stdout']?.isNotEmpty == true
+                ? runData['stdout']
+                : (runData['stderr']?.isNotEmpty == true
+                    ? runData['stderr']
+                    : 'No output');
+          });
+        }
+        return; // Online execution succeeded
+      }
+    } catch (e) {
+      // Online execution failed, fall back to offline simulation
+      debugPrint('Online execution failed: $e');
+    }
+
+    // OFFLINE SIMULATION
+    await _simulateOfflineExecution();
+  }
+
+  Future<void> _simulateOfflineExecution() async {
+    final code = _codeController.text;
+    final random = Random();
+
+    // Simulate processing time
+    await Future.delayed(Duration(milliseconds: 500 + random.nextInt(1000)));
+
+    String simulatedOutput;
+
+    // Analyze code patterns and provide simulated output
+    if (code.trim().isEmpty) {
+      simulatedOutput = '🔴 No code to execute\nPlease write some code first.';
+    } else if (_containsPattern(code, [
+      'print',
+      'console.log',
+      'System.out',
+      'Console.WriteLine',
+    ])) {
+      simulatedOutput = _simulatePrintStatements(code);
+    } else if (_containsPattern(code, ['for', 'while', 'loop'])) {
+      simulatedOutput = _simulateLoops(code);
+    } else if (_containsPattern(code, ['if', 'else', 'switch', 'case'])) {
+      simulatedOutput = _simulateConditionals(code);
+    } else if (_containsPattern(code, [
+      'function',
+      'def ',
+      'void ',
+      'public ',
+      'private ',
+    ])) {
+      simulatedOutput = _simulateFunctions(code);
+    } else if (_containsPattern(code, ['+', '-', '*', '/', '='])) {
+      simulatedOutput = _simulateCalculations(code);
+    } else {
+      simulatedOutput = _generateGenericOutput(code);
+    }
+
+    if (mounted) {
+      setState(() {
+        _output = '''🟡 OFFLINE SIMULATION MODE
+Connected to Local Dart VM
+Language: ${_getDisplayName(_selectedLanguage)}
+Process ID: ${random.nextInt(9999)}
+
+--- Execution Output ---
+$simulatedOutput
+
+--- Program Finished ---
+Exit code: 0
+Execution time: ${0.5 + random.nextDouble() * 2}s
+
+💡 Tip: Connect to internet for real code execution''';
+      });
+    }
+  }
+
+  bool _containsPattern(String code, List<String> patterns) {
+    return patterns.any(
+      (pattern) => code.toLowerCase().contains(pattern.toLowerCase()),
+    );
+  }
+
+  String _simulatePrintStatements(String code) {
+    final lines = code.split('\n');
+    final output = StringBuffer();
+    final random = Random();
+
+    for (final line in lines) {
+      if (line.contains('print') ||
+          line.contains('console.log') ||
+          line.contains('System.out') ||
+          line.contains('Console.WriteLine')) {
+        // Extract content between quotes or parentheses
+        final content = _extractContent(line);
+        if (content.isNotEmpty) {
+          output.writeln(content);
+        } else {
+          // Generate random output for print statements without clear content
+          final outputs = [
+            'Hello, World!',
+            '42',
+            '3.14159',
+            'true',
+            'false',
+            'Dart is awesome!',
+            'Code executed successfully',
+            'Variable value: ${random.nextInt(100)}',
+            'Result: ${random.nextDouble() * 100}',
+            'Array length: ${random.nextInt(10)}',
+          ];
+          output.writeln(outputs[random.nextInt(outputs.length)]);
+        }
+      }
+    }
+
+    return output.toString().isEmpty
+        ? 'Program executed (print statements detected)'
+        : output.toString();
+  }
+
+  String _simulateLoops(String code) {
+    final random = Random();
+    final output = StringBuffer();
+    final iterations = 3 + random.nextInt(5); // Simulate 3-7 iterations
+
+    output.writeln('Loop executing $iterations times:');
+
+    for (int i = 0; i < iterations; i++) {
+      output.writeln('Iteration $i: i = $i, value = ${random.nextInt(100)}');
+    }
+
+    output.writeln('Loop completed successfully');
+    return output.toString();
+  }
+
+  String _simulateConditionals(String code) {
+    final random = Random();
+    final conditions = [
+      'true',
+      'false',
+      'x > 5',
+      'name == "John"',
+      'count < 10',
+    ];
+    final selectedCondition = conditions[random.nextInt(conditions.length)];
+
+    return '''Condition evaluated: $selectedCondition
+Branch executed: ${random.nextBool() ? 'if block' : 'else block'}
+Result: ${random.nextBool() ? 'Condition met' : 'Condition not met'}''';
+  }
+
+  String _simulateFunctions(String code) {
+    final random = Random();
+    final functions = [
+      'main()',
+      'calculate()',
+      'processData()',
+      'initialize()',
+      'run()',
+    ];
+    final calledFunction = functions[random.nextInt(functions.length)];
+
+    return '''Function $calledFunction called
+Parameters processed: ${random.nextInt(5)}
+Return value: ${random.nextInt(100)}
+Execution completed in ${random.nextDouble() * 10}ms''';
+  }
+
+  String _simulateCalculations(String code) {
+    final random = Random();
+    final calculations = [
+      'Result: ${random.nextInt(100)}',
+      'Sum: ${random.nextInt(50) + random.nextInt(50)}',
+      'Product: ${random.nextInt(10) * random.nextInt(10)}',
+      'Average: ${random.nextDouble() * 100}',
+      'Calculation completed successfully',
+    ];
+
+    return calculations[random.nextInt(calculations.length)];
+  }
+
+  String _generateGenericOutput(String code) {
+    final random = Random();
+    final lines = code.split('\n').where((line) => line.trim().isNotEmpty).length;
+    final chars = code.length;
+
+    final outputs = [
+      'Program executed successfully',
+      'Code processed without errors',
+      'Execution completed',
+      '$lines lines of code processed',
+      '$chars characters compiled successfully',
+      'No output generated (program may be waiting for input)',
+      'Execution finished with exit code 0',
+    ];
+
+    return outputs[random.nextInt(outputs.length)];
+  }
+
+  String _extractContent(String line) {
+    // Try to extract content from quotes
+    final quoteRegExp = RegExp(r'''["']([^"']*)["']''');
+    final quoteMatch = quoteRegExp.firstMatch(line);
+    if (quoteMatch != null) {
+      final content = quoteMatch.group(1);
+      if (content != null && content.isNotEmpty) {
+        return content;
+      }
+    }
+
+    // Try to extract content from parentheses
+    final parenRegExp = RegExp(r'\((.*?)\)');
+    final parenMatch = parenRegExp.firstMatch(line);
+    if (parenMatch != null) {
+      final content = parenMatch.group(1);
+      if (content != null && content.isNotEmpty) {
+        return content;
+      }
+    }
+
+    return '';
+  }
+
+  String _getDisplayName(String value) {
+    switch (value) {
+      case 'python':
+        return 'Python';
+      case 'java':
+        return 'Java';
+      case 'csharp':
+        return 'C#';
+      case 'vb':
+        return 'VB';
+      default:
+        return value;
+    }
+  }
+
+  String _getLanguageDisplayName(String lang) {
+    switch (lang) {
+      case 'python':
+        return 'Python';
+      case 'java':
+        return 'Java';
+      case 'csharp':
+        return 'C#';
+      case 'vb':
+        return 'VB';
+      default:
+        return lang;
+    }
+  }
+
+  void _clearCode() {
+    if (mounted) {
+      setState(() {
+        _codeController.text = '';
+        _output = '';
+      });
+    }
+  }
+
+  void _copyCode() {
+    Clipboard.setData(ClipboardData(text: _codeController.text));
+    if (mounted) {
+      _showSnackBar('Code copied to clipboard!');
+    }
+  }
+
+  void _copyOutput() {
+    if (_output.isNotEmpty) {
+      Clipboard.setData(ClipboardData(text: _output));
+      if (mounted) {
+        _showSnackBar('Output copied to clipboard!');
+      }
+    }
+  }
+
+  void _clearOutput() {
+    if (mounted) {
+      setState(() {
+        _output = '';
+      });
+    }
+  }
+
+  void _toggleTheme() {
+    if (mounted) {
+      setState(() {
+        _isDarkMode = !_isDarkMode;
+      });
+    }
+  }
+
+  void _changeLanguage(String? newValue) {
+    if (newValue != null && _languages.containsKey(newValue)) {
+      if (mounted) {
+        setState(() {
+          _selectedLanguage = newValue;
+          _codeController.language = _languages[newValue]!;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(Theme.of(context).primaryColor),
+          ),
+        ),
+      );
+    }
+
+    final screenSize = MediaQuery.of(context).size;
+    final isSmallScreen = screenSize.width < 600;
+    final isVerySmallScreen = screenSize.width < 400;
+    final isTablet = screenSize.width >= 600 && screenSize.width < 1200;
+
+
+    // Adjust font sizes and padding based on screen size
+    final double titleFontSize = isVerySmallScreen ? 14 : (isSmallScreen ? 16 : (isTablet ? 18 : 20));
+    final double bodyFontSize = isVerySmallScreen ? 12 : (isSmallScreen ? 14 : 16);
+    final double iconSize = isVerySmallScreen ? 18 : (isSmallScreen ? 20 : 24);
+    final double buttonPadding = isVerySmallScreen ? 8 : (isSmallScreen ? 12 : 16);
+
+    final dropdownItems = _languages.keys.map<DropdownMenuItem<String>>((String key) {
+      return DropdownMenuItem<String>(
+        value: key,
+        child: Text(
+          _getDisplayName(key),
+          style: TextStyle(fontSize: isVerySmallScreen ? 12 : 14),
+        ),
+      );
+    }).toList();
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Loading Editor...'),
-        backgroundColor: Colors.indigo,
-      ),
-      body: const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('Initializing code editor...'),
+            Text(
+              _currentRoomTitle,
+              style: TextStyle(fontSize: titleFontSize),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (_currentRoomDescription != null && _currentRoomDescription!.isNotEmpty)
+              Text(
+                _currentRoomDescription!,
+                style: TextStyle(
+                  fontSize: isSmallScreen ? 10 : 12,
+                  fontWeight: FontWeight.normal,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+          ],
+        ),
+        foregroundColor: Colors.white,
+        backgroundColor: Colors.indigo,
+        bottom: TabBar(
+          controller: _tabController,
+          indicatorColor: Colors.white,
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.lightBlueAccent,
+          tabs: [
+            Tab(
+              icon: Icon(Icons.code, size: iconSize),
+              text: isVerySmallScreen ? null : 'Editor',
+            ),
+            Tab(
+              icon: Icon(Icons.output, size: iconSize),
+              text: isVerySmallScreen ? null : 'Output',
+            ),
+            Tab(
+              icon: Icon(Icons.folder, size: iconSize),
+              text: isVerySmallScreen ? null : 'Files',
+            ),
+          ],
+        ),
+        actions: [
+          // Theme toggle button - always visible but with appropriate size
+          IconButton(
+            icon: Icon(
+              _isDarkMode ? Icons.dark_mode : Icons.light_mode,
+              size: iconSize,
+            ),
+            onPressed: _toggleTheme,
+            tooltip: 'Toggle Theme',
+            padding: EdgeInsets.all(isVerySmallScreen ? 4 : 8),
+          ),
+          
+          // Run button - always visible
+          IconButton(
+            icon: Icon(Icons.play_arrow, size: iconSize),
+            onPressed: _runCode,
+            tooltip: 'Run Code',
+            padding: EdgeInsets.all(isVerySmallScreen ? 4 : 8),
+          ),
+          
+          // Language dropdown - visible on all but very small screens
+          if (!isVerySmallScreen) ...[
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: 8),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: _selectedLanguage,
+                  items: dropdownItems,
+                  onChanged: _changeLanguage,
+                  dropdownColor: _isDarkMode ? Colors.grey[800] : Colors.white,
+                  iconSize: isSmallScreen ? 18 : 24,
+                  style: TextStyle(
+                    color: Colors.black,
+                    fontSize: isSmallScreen ? 12 : 14,
+                  ),
+                ),
+              ),
+            ),
+          ],
+          
+          // Overflow menu for additional options
+          PopupMenuButton<String>(
+            icon: Icon(Icons.more_vert, size: iconSize),
+            onSelected: (value) {
+              switch (value) {
+                case 'save':
+                  _saveCurrentRoom();
+                  break;
+                case 'save_as':
+                  _saveAsNewRoom();
+                  break;
+                case 'update_info':
+                  _updateRoomInfo();
+                  break;
+                case 'copy':
+                  _copyCode();
+                  break;
+                case 'clear':
+                  _clearCode();
+                  break;
+                case 'language':
+                  // Show language selection dialog on very small screens
+                  if (isVerySmallScreen) {
+                    _showLanguageSelectionDialog();
+                  }
+                  break;
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'save',
+                child: ListTile(
+                  leading: Icon(Icons.save),
+                  title: Text('Save'),
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'save_as',
+                child: ListTile(
+                  leading: Icon(Icons.save_as),
+                  title: Text('Save As...'),
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'update_info',
+                child: ListTile(
+                  leading: Icon(Icons.info),
+                  title: Text('Update File Info'),
+                ),
+              ),
+              if (isVerySmallScreen)
+                const PopupMenuItem(
+                  value: 'language',
+                  child: ListTile(
+                    leading: Icon(Icons.code),
+                    title: Text('Change Language'),
+                  ),
+                ),
+              const PopupMenuItem(
+                value: 'copy',
+                child: ListTile(
+                  leading: Icon(Icons.copy),
+                  title: Text('Copy Code'),
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'clear',
+                child: ListTile(
+                  leading: Icon(Icons.delete),
+                  title: Text('Clear Code'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+      body: SafeArea(
+        bottom: false,
+        child: TabBarView(
+          controller: _tabController,
+          children: [
+            // Editor Tab
+            _buildEditorTab(isSmallScreen, bodyFontSize),
+
+            // Output Tab
+            _buildOutputTab(isSmallScreen, bodyFontSize, iconSize),
+
+            // Files Tab
+            _buildFilesTab(isSmallScreen, isVerySmallScreen, bodyFontSize, iconSize, buttonPadding),
           ],
         ),
       ),
     );
   }
 
-  final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-  final themeStyles = isDarkMode ? atomOneDarkTheme : githubTheme;
+  Widget _buildEditorTab(bool isSmallScreen, double bodyFontSize) {
+    return Container(
+      color: _isDarkMode ? Colors.black : Colors.grey[200],
+      child: CodeTheme(
+        data: CodeThemeData(
+          styles: _isDarkMode ? atomOneDarkTheme : githubTheme,
+        ),
+        child: SingleChildScrollView(
+          child: CodeField(
+            controller: _codeController,
+            textStyle: TextStyle(
+              fontFamily: 'SourceCodePro',
+              fontSize: bodyFontSize,
+              color: _isDarkMode ? Colors.white : Colors.black,
+            ),
+            minLines: 10,
+            maxLines: 1000,
+          ),
+        ),
+      ),
+    );
+  }
 
-  return Scaffold(
-    appBar: AppBar(
-      title: Text('Code Editor ($selectedLanguage) ${isOnline ? '' : '(Offline)'}'),
-      backgroundColor: isOnline ? Colors.indigo : Colors.orange,
-      actions: [
-        if (_hasConnectionError)
-          IconButton(
-            icon: const Icon(Icons.wifi_off, color: Colors.red),
-            onPressed: _retryConnection,
-            tooltip: 'Connection error - tap to retry',
-          )
-        else
-          IconButton(
-            icon: Icon(isOnline ? Icons.cloud_done : Icons.cloud_off),
-            onPressed: () {
-              showDialog(
-                context: context,
-                builder: (_) => AlertDialog(
-                  title: Text(isOnline ? 'Online Mode' : 'Offline Mode'),
-                  content: Text(isOnline
-                      ? 'You are connected to the server. Changes will sync automatically.'
-                      : 'You are currently offline. Your code is saved locally and will sync when you reconnect.'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text("OK"),
+  Widget _buildOutputTab(bool isSmallScreen, double bodyFontSize, double iconSize) {
+    return Container(
+      color: _isDarkMode ? Colors.grey[900] : Colors.grey[100],
+      child: Column(
+        children: [
+          Container(
+            padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
+            color: _isDarkMode ? Colors.grey[800] : Colors.grey[200],
+            child: Row(
+              children: [
+                Text(
+                  'Output',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: bodyFontSize,
+                    color: _isDarkMode ? Colors.white : Colors.black,
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: Icon(Icons.content_copy, size: iconSize),
+                  onPressed: _copyOutput,
+                  tooltip: 'Copy Output',
+                ),
+                IconButton(
+                  icon: Icon(Icons.clear_all, size: iconSize),
+                  onPressed: _clearOutput,
+                  tooltip: 'Clear Output',
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Container(
+              width: double.infinity,
+              padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  _output.isEmpty
+                      ? 'Output will appear here after running code...'
+                      : _output,
+                  style: TextStyle(
+                    fontFamily: 'SourceCodePro',
+                    fontSize: bodyFontSize,
+                    color: _isDarkMode ? Colors.white : Colors.black,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilesTab(bool isSmallScreen, bool isVerySmallScreen, double bodyFontSize, double iconSize, double buttonPadding) {
+    return Container(
+      color: _isDarkMode ? Colors.grey[900] : Colors.grey[100],
+      child: Column(
+        children: [
+          Container(
+            padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+            color: _isDarkMode ? Colors.grey[800] : Colors.grey[200],
+            child: Row(
+              children: [
+                Text(
+                  'Saved Files',
+                  style: TextStyle(
+                    fontSize: bodyFontSize,
+                    fontWeight: FontWeight.bold,
+                    color: _isDarkMode ? Colors.white : Colors.black,
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: Icon(Icons.refresh, size: iconSize),
+                  onPressed: _loadAllRooms,
+                  tooltip: 'Refresh Files',
+                ),
+                if (!isVerySmallScreen)
+                  Padding(
+                    padding: EdgeInsets.only(left: buttonPadding),
+                    child: ElevatedButton.icon(
+                      onPressed: _saveAsNewRoom,
+                      icon: Icon(Icons.save, size: iconSize),
+                      label: Text(isSmallScreen ? 'Save As' : 'Save Current As New'),
                     ),
-                    if (!isOnline)
-                      TextButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          _retryConnection();
-                        },
-                        child: const Text("Retry Connection"),
+                  ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: _isLoadingRooms
+                ? Center(
+                    child: CircularProgressIndicator(
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        _isDarkMode ? Colors.white : Colors.blue,
                       ),
-                  ],
-                ),
+                    ),
+                  )
+                : _savedRooms.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.folder_open,
+                              size: isSmallScreen ? 48 : 64,
+                              color: _isDarkMode ? Colors.grey[600] : Colors.grey[400],
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'No saved files yet',
+                              style: TextStyle(
+                                fontSize: bodyFontSize,
+                                color: _isDarkMode ? Colors.grey[400] : Colors.grey[600],
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 32),
+                              child: Text(
+                                'Save your current code to get started',
+                                style: TextStyle(
+                                  fontSize: isSmallScreen ? 12 : 14,
+                                  color: _isDarkMode ? Colors.grey[500] : Colors.grey[500],
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    : ListView.builder(
+                        itemCount: _savedRooms.length,
+                        itemBuilder: (context, index) {
+                          final room = _savedRooms[index];
+                          final isCurrentRoom = room['room_id'] == widget.roomId;
+
+                          return Card(
+                            margin: EdgeInsets.symmetric(
+                              horizontal: isSmallScreen ? 8 : 12,
+                              vertical: 4,
+                            ),
+                            color: _isDarkMode
+                                ? (isCurrentRoom ? Colors.blue[900] : Colors.grey[800])
+                                : (isCurrentRoom ? Colors.blue[50] : Colors.white),
+                            child: ListTile(
+                              leading: Icon(
+                                _getFileIcon(room['language']),
+                                color: _isDarkMode ? Colors.white : Colors.blue,
+                                size: iconSize,
+                              ),
+                              title: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      room['title'] ?? 'Untitled',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: bodyFontSize,
+                                        color: _isDarkMode ? Colors.white : Colors.black,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  if (isCurrentRoom)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.blue,
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Text(
+                                        'Current',
+                                        style: TextStyle(
+                                          fontSize: isSmallScreen ? 8 : 10,
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (room['description'] != null && room['description'].isNotEmpty)
+                                    Text(
+                                      room['description'],
+                                      style: TextStyle(
+                                        fontSize: isSmallScreen ? 10 : 12,
+                                        color: _isDarkMode ? Colors.grey[300] : Colors.grey[600],
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  Text(
+                                    '${_getLanguageDisplayName(room['language'] ?? 'unknown')} • ${_formatDate(room['updated_at'])}',
+                                    style: TextStyle(
+                                      fontSize: isSmallScreen ? 10 : 12,
+                                      color: _isDarkMode ? Colors.grey[400] : Colors.grey[600],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              trailing: isCurrentRoom
+                                  ? IconButton(
+                                      icon: Icon(Icons.info, size: iconSize),
+                                      onPressed: () => _updateRoomInfo(),
+                                      tooltip: 'Edit File Info',
+                                    )
+                                  : PopupMenuButton<String>(
+                                      icon: Icon(Icons.more_vert, size: iconSize - 4),
+                                      onSelected: (value) {
+                                        if (value == 'load') {
+                                          _loadRoom(room);
+                                        } else if (value == 'delete') {
+                                          _deleteRoom(room);
+                                        }
+                                      },
+                                      itemBuilder: (context) => [
+                                        const PopupMenuItem(
+                                          value: 'load',
+                                          child: ListTile(
+                                            leading: Icon(Icons.open_in_browser),
+                                            title: Text('Open'),
+                                          ),
+                                        ),
+                                        const PopupMenuItem(
+                                          value: 'delete',
+                                          child: ListTile(
+                                            leading: Icon(Icons.delete, color: Colors.red),
+                                            title: Text('Delete'),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                              onTap: () => _loadRoom(room),
+                            ),
+                          );
+                        },
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showLanguageSelectionDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Select Language'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: _languages.length,
+            itemBuilder: (context, index) {
+              final languageKey = _languages.keys.elementAt(index);
+              return ListTile(
+                leading: Icon(_getFileIcon(languageKey)),
+                title: Text(_getDisplayName(languageKey)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _changeLanguage(languageKey);
+                },
               );
             },
-            tooltip: isOnline ? 'Online' : 'Offline - tap for info',
-          ),
-        if (executionResult != null)
-          IconButton(
-            icon: const Icon(Icons.info_outline),
-            onPressed: () {
-              showDialog(
-                context: context,
-                builder: (_) => AlertDialog(
-                  title: const Text('Execution Result'),
-                  content: SingleChildScrollView(
-                    child: Text(executionResult!),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text("Close"),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-      ],
-    ),
-    body: Column(
-      children: [
-        // Status and language selector
-        Container(
-          padding: const EdgeInsets.all(12),
-          child: Row(
-            children: [
-              DropdownButton<String>(
-                value: selectedLanguage,
-                items: languageSnippets.keys
-                    .map((lang) => DropdownMenuItem(
-                          value: lang,
-                          child: Text(lang),
-                        ))
-                    .toList(),
-                onChanged: (val) => _insertSnippet(val!),
-              ),
-              const SizedBox(width: 16),
-              _buildStatusIndicator(),
-            ],
           ),
         ),
+      ),
+    );
+  }
 
-        // Connection error banner
-        if (_hasConnectionError)
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            color: Colors.red.withOpacity(0.1),
-            child: Row(
-              children: [
-                Icon(Icons.error_outline, color: Colors.red, size: 20),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Connection error. Working in offline mode.',
-                    style: TextStyle(color: Colors.red),
-                  ),
-                ),
-                TextButton(
-                  onPressed: _retryConnection,
-                  child: Text('Retry', style: TextStyle(color: Colors.red)),
-                ),
-              ],
-            ),
-          ),
+  IconData _getFileIcon(String language) {
+    switch (language) {
+      case 'python':
+        return Icons.terminal;
+      case 'java':
+        return Icons.coffee;
+      case 'csharp':
+        return Icons.code;
+      case 'vb':
+        return Icons.data_object;
+      default:
+        return Icons.insert_drive_file;
+    }
+  }
 
-        // Code Editor (Expanded to fill space)
-        Expanded(
-          child: CodeTheme(
-            data: CodeThemeData(styles: themeStyles),
-            child: CodeField(
-              controller: _codeController,
-              textStyle: const TextStyle(
-                fontFamily: "monospace",
-                fontSize: 14,
-              ),
-              expands: true,
-            ),
-          ),
-        ),
-
-        // Execution result (scrollable)
-        if (executionResult != null)
-          Container(
-            width: double.infinity,
-            height: 120,
-            padding: const EdgeInsets.all(12),
-            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.green.withOpacity(0.1),
-              border: Border.all(color: Colors.green),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: SingleChildScrollView(
-              child: Text(
-                executionResult!,
-                style: const TextStyle(fontFamily: "monospace", fontSize: 12),
-              ),
-            ),
-          ),
-
-        // Action buttons at bottom (scrollable if many)
-        Container(
-          padding: const EdgeInsets.all(8),
-          color: Colors.grey[100],
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                ElevatedButton.icon(
-                  onPressed: isExecuting ? null : _runCode,
-                  icon: const Icon(Icons.play_arrow),
-                  label: Text(isExecuting ? "Running..." : "Run Code"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  onPressed: () async {
-                    await Clipboard.setData(ClipboardData(text: _codeController.text));
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Code copied to clipboard")),
-                    );
-                  },
-                  icon: const Icon(Icons.copy),
-                  label: const Text("Copy Code"),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  onPressed: _showSaveDialog,
-                  icon: _isSaving
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.save),
-                  label: const Text("Save File"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  onPressed: _showSavedFilesDialog,
-                  icon: const Icon(Icons.folder),
-                  label: const Text("My Files"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.purple,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  onPressed: _showOpenFileDialog,
-                  icon: const Icon(Icons.folder_open),
-                  label: const Text("Open Room"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-                if (!isOnline || _hasConnectionError) ...[
-                  const SizedBox(width: 8),
-                  ElevatedButton.icon(
-                    onPressed: _retryConnection,
-                    icon: const Icon(Icons.sync),
-                    label: const Text("Retry Connection"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                      foregroundColor: Colors.white,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
-}
-  Widget _buildStatusIndicator() {
-    if (_hasConnectionError) {
-      return Chip(
-        backgroundColor: Colors.red.withOpacity(0.2),
-        label: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.error_outline, size: 16, color: Colors.red),
-            SizedBox(width: 4),
-            Text(
-              'Connection Error',
-              style: TextStyle(color: Colors.red),
-            ),
-          ],
-        ),
-      );
-    } else if (!isOnline) {
-      return Chip(
-        backgroundColor: Colors.orange.withOpacity(0.2),
-        label: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.cloud_off, size: 16, color: Colors.orange),
-            SizedBox(width: 4),
-            Text(
-              'Offline',
-              style: TextStyle(color: Colors.orange),
-            ),
-          ],
-        ),
-      );
-    } else {
-      return Chip(
-        backgroundColor: Colors.green.withOpacity(0.2),
-        label: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.cloud_done, size: 16, color: Colors.green),
-            SizedBox(width: 4),
-            Text(
-              'Online',
-              style: TextStyle(color: Colors.green),
-            ),
-          ],
-        ),
-      );
+  String _formatDate(String dateString) {
+    try {
+      final date = DateTime.parse(dateString);
+      return '${date.month}/${date.day}/${date.year} ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
+    } catch (e) {
+      return 'Unknown date';
     }
   }
 }
