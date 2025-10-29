@@ -16,6 +16,7 @@ import 'package:codexhub01/utils/newpass.dart';
 import 'package:codexhub01/collabscreen/lobby.dart';
 import 'package:codexhub01/mentorship/friendlst.dart';
 import 'package:codexhub01/reusable_widgets/SessionsTabScreen.dart';
+import 'package:codexhub01/services/notif.dart';
 
 // 🔹 App Links
 import 'package:codexhub01/utils/uni_link_listener.dart';
@@ -27,7 +28,7 @@ bool isOfflineMode = false;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+  await NotificationService.initialize();
   // 🔹 Set preferred orientations
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
@@ -171,7 +172,6 @@ class _CodeHubAppState extends State<CodeHubApp> {
           title: 'CodeXHub',
           debugShowCheckedModeBanner: false,
           navigatorKey: navigatorKey,
-          themeMode: themeMode,
           theme: ThemeData.light(useMaterial3: true).copyWith(
             colorScheme: ColorScheme.fromSeed(
               seedColor: Colors.indigo,
@@ -187,6 +187,7 @@ class _CodeHubAppState extends State<CodeHubApp> {
               brightness: Brightness.dark,
             ),
           ),
+          themeMode: themeMode,
           initialRoute: isOfflineMode ? '/dashboard' : '/intro',
           routes: {
             '/intro': (context) => const IntroScreen(),
@@ -250,9 +251,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     
     // In offline mode, no user is logged in
     _isUserLoggedIn = !isOfflineMode && (supabase.auth.currentUser != null);
+    
+    // Load dark mode preference
+    _loadDarkModePreference();
 
     if (_isUserLoggedIn && !isOfflineMode) {
       _listenToIncomingCalls();
+      _loadUserThemePreference(); // Load user's theme preference from profile
     }
 
     // Listen for connectivity changes
@@ -266,6 +271,42 @@ class _DashboardScreenState extends State<DashboardScreen> {
         toggleOfflineMode(true);
       }
     });
+  }
+
+  Future<void> _loadDarkModePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final isDark = prefs.getBool('isDarkMode') ?? false;
+    themeNotifier.value = isDark ? ThemeMode.dark : ThemeMode.light;
+  }
+
+  Future<void> _loadUserThemePreference() async {
+    if (isOfflineMode || !_isUserLoggedIn) return;
+    
+    try {
+      final user = supabase.auth.currentUser;
+      if (user != null) {
+        final response = await supabase
+            .from('profiles_new')
+            .select('is_dark_mode')
+            .eq('id', user.id)
+            .single()
+            .timeout(const Duration(seconds: 5));
+        
+        final userDarkMode = response['is_dark_mode'] as bool? ?? false;
+        
+        // Update theme based on user preference
+ 
+        themeNotifier.value = userDarkMode ? ThemeMode.dark : ThemeMode.light;
+        
+        // Save to local preferences for offline use
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('isDarkMode', userDarkMode);
+      }
+    } catch (e) {
+      debugPrint('Error loading user theme preference: $e');
+      // Fall back to local preference
+      _loadDarkModePreference();
+    }
   }
 
   void _showReconnectionDialog() {
@@ -283,6 +324,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             onPressed: () {
               Navigator.pop(context);
               toggleOfflineMode(false);
+              // Reload user preferences when going back online
+              if (_isUserLoggedIn) {
+                _loadUserThemePreference();
+              }
             },
             child: Text('Go Online'),
           ),
@@ -406,7 +451,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         title: const Text('CodeXHub Dashboard'),
         centerTitle: true,
         automaticallyImplyLeading: false,
-        backgroundColor: Colors.indigo,
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        foregroundColor: Theme.of(context).colorScheme.onPrimary,
         actions: [
           if (isOfflineMode)
             Padding(

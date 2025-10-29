@@ -1,7 +1,6 @@
-// ignore_for_file: use_build_context_synchronously
-
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart'; 
 import 'package:codexhub01/services/friendservice.dart';
 import 'package:codexhub01/mentorship/menteemessaging_screen.dart';
 
@@ -14,58 +13,122 @@ class MentorFriendPage extends StatefulWidget {
 
 class _MentorFriendPageState extends State<MentorFriendPage> {
   final service = MentorFriendService();
+  final SupabaseClient supabase = Supabase.instance.client; 
+  
   List<Map<String, dynamic>> friends = [];
   List<Map<String, dynamic>> requests = [];
   List<Map<String, dynamic>> suggestions = [];
   List<Map<String, dynamic>> searchResults = [];
 
   final TextEditingController _searchController = TextEditingController();
-  StreamSubscription? _friendSub;
+  StreamSubscription? _requestsSub;
+  StreamSubscription? _friendsSub;
+  
+  bool _isLoading = false;
+  Timer? _debounceTimer;
 
   @override
   void initState() {
     super.initState();
     loadData();
-
-    // Real-time listener for friend_requests table
-    _friendSub = service.supabase
-        .from('mentor_friend_requests')
-        .stream(primaryKey: ['id'])
-        .listen((_) {
-      loadData(); // refresh UI automatically
-    });
+    _setupRealtimeListeners();
   }
 
   @override
   void dispose() {
-    _friendSub?.cancel();
+    _requestsSub?.cancel();
+    _friendsSub?.cancel();
+    _debounceTimer?.cancel();
+    _searchController.dispose();
     super.dispose();
   }
 
-  Future<void> loadData() async {
-    final reqs = await service.getPendingRequests();
-    final frs = await service.getFriends();
-    final suggs = await service.getSuggestions();
-    if (!mounted) return;
-    setState(() {
-      requests = reqs;
-      friends = frs;
-      suggestions = suggs;
-      searchResults = [];
+  /// Setup real-time listeners for friend requests and friendships
+  void _setupRealtimeListeners() {
+    final userId = supabase.auth.currentUser?.id;
+    if (userId == null) return;
+
+    // Listen to friend requests changes
+    _requestsSub = supabase
+        .from('mentor_friend_requests')
+        .stream(primaryKey: ['id'])
+        .listen((data) {
+      debugPrint('🔔 Friend requests updated');
+      _debouncedLoadData();
+    });
+
+    // Listen to friendships changes
+    _friendsSub = supabase
+        .from('mentor_friends')
+        .stream(primaryKey: ['id'])
+        .listen((data) {
+      debugPrint('🔔 Friendships updated');
+      _debouncedLoadData();
     });
   }
 
+  /// Debounced load to prevent multiple rapid calls
+  void _debouncedLoadData() {
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 500), () {
+      if (mounted) loadData();
+    });
+  }
+
+  /// Load all data (friends, requests, suggestions)
+  Future<void> loadData() async {
+    if (_isLoading) {
+      debugPrint('⚠️ Already loading, skipping...');
+      return;
+    }
+    
+    setState(() => _isLoading = true);
+    
+    try {
+      debugPrint('🔄 Loading data...');
+      
+      final reqs = await service.getPendingRequests();
+      final frs = await service.getFriends();
+      final suggs = await service.getSuggestions();
+      
+      if (!mounted) return;
+      
+      setState(() {
+        requests = reqs;
+        friends = frs;
+        suggestions = suggs;
+        searchResults = [];
+        _isLoading = false;
+      });
+      
+      debugPrint('✅ Loaded: ${friends.length} friends, ${requests.length} requests, ${suggestions.length} suggestions');
+    } catch (e) {
+      debugPrint('❌ Error loading data: $e');
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  /// Search users by username
   Future<void> searchUsers(String query) async {
     if (query.isEmpty) {
       setState(() => searchResults = []);
       return;
     }
-    final res = await service.searchUsers(query);
-    if (!mounted) return;
-    setState(() {
-      searchResults = res;
-    });
+    
+    try {
+      final res = await service.searchUsers(query);
+      if (!mounted) return;
+      
+      setState(() {
+        searchResults = res;
+      });
+    } catch (e) {
+      debugPrint('❌ Error searching users: $e');
+    }
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -82,12 +145,12 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
               Tab(text: "Requests"),
               Tab(text: "Friends"),
               Tab(text: "People You May Know"),
-          ],
+            ],
           ),
         ),
         body: Column(
           children: [
-            // 🔍 Search bar
+            // Search bar
             Padding(
               padding: const EdgeInsets.all(8.0),
               child: TextField(
@@ -103,6 +166,11 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
               ),
             ),
 
+            // Loading indicator
+            if (_isLoading)
+              const LinearProgressIndicator(),
+
+            // Tab content
             Expanded(
               child: TabBarView(
                 children: [
@@ -123,6 +191,7 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
     if (requests.isEmpty) {
       return const Center(child: Text("No pending requests"));
     }
+    
     return ListView(
       children: requests.map((req) {
         final user = req['profiles_new'];
@@ -139,55 +208,25 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
           margin: const EdgeInsets.all(6),
           child: ListTile(
             leading: CircleAvatar(
-              backgroundImage:
-                  avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
+              backgroundImage: avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
               child: avatarUrl.isEmpty ? const Icon(Icons.person) : null,
             ),
             title: Text(username),
-            subtitle: Text(user['role'] ?? 'Mentor'),
+            subtitle: Text(user['role'] ?? 'User'),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 IconButton(
                   icon: const Icon(Icons.check, color: Colors.green),
-                  onPressed: () async {
-                    await service.acceptRequest(requestId, senderId);
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text("You are now friends with $username")),
-                    );
-                    await loadData();
-                  },
+                  onPressed: () => _handleAcceptRequest(requestId, senderId, username),
                 ),
                 IconButton(
                   icon: const Icon(Icons.close, color: Colors.red),
-                  onPressed: () async {
-                    await service.rejectRequest(requestId);
-                    if (!mounted) return;
-                    await loadData();
-                  },
+                  onPressed: () => _handleRejectRequest(requestId),
                 ),
                 IconButton(
                   icon: const Icon(Icons.chat, color: Colors.indigo),
-                  onPressed: () async {
-                    final friend = await service.startChatWithFriend(senderId);
-                    if (friend == null) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("You can only chat with friends")),
-                      );
-                      return;
-                    }
-                    if (!mounted) return;
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ChatScreen(
-                          otherUserId: friend['id']!,
-                          otherUserName: friend['username']!,
-                        ),
-                      ),
-                    );
-                  },
+                  onPressed: () => _handleChatWithSender(senderId),
                 ),
               ],
             ),
@@ -199,82 +238,64 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
 
   /// 👥 Friends Tab
   Widget _buildFriends() {
-  if (friends.isEmpty) {
-    return const Center(
-      child: Text("No friends yet", style: TextStyle(fontSize: 16)),
+    if (friends.isEmpty) {
+      return const Center(
+        child: Text("No friends yet", style: TextStyle(fontSize: 16)),
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+      itemCount: friends.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 6),
+      itemBuilder: (context, index) {
+        final friend = friends[index];
+
+        // Service returns flat structure with other user's data
+        final id = friend['id']?.toString();
+        final username = friend['username']?.toString() ?? 'Unknown';
+        final avatarUrl = friend['avatar_url']?.toString() ?? '';
+        final role = friend['role']?.toString() ?? 'User';
+
+        if (id == null) return const SizedBox.shrink();
+
+        return Card(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          elevation: 2,
+          child: ListTile(
+            leading: CircleAvatar(
+              backgroundImage: avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
+              child: avatarUrl.isEmpty ? const Icon(Icons.person) : null,
+            ),
+            title: Text(
+              username,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: Text(role),
+            trailing: IconButton(
+              icon: const Icon(Icons.chat, color: Colors.indigo),
+              onPressed: () => _handleChatWithFriend(id),
+            ),
+          ),
+        );
+      },
     );
   }
 
-  final currentUserId = service.supabase.auth.currentUser?.id ?? '';
-
-  return ListView.separated(
-    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-    itemCount: friends.length,
-    separatorBuilder: (_, __) => const SizedBox(height: 6),
-    itemBuilder: (context, index) {
-      final friendData = friends[index];
-
-      // Determine the other user (not the current user)
-      final profile = friendData['mentor_id'] == currentUserId
-          ? friendData['friend']    // friend_id profile
-          : friendData['mentor'];   // mentor_id profile
-
-      if (profile == null) return const SizedBox.shrink();
-
-      final id = profile['id']?.toString();
-      final username = profile['username']?.toString() ?? 'Unknown';
-      final avatarUrl = profile['avatar_url'] ?? '';
-
-      if (id == null) return const SizedBox.shrink();
-
-      return Card(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-        elevation: 2,
-        child: ListTile(
-          leading: CircleAvatar(
-            backgroundImage: avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
-            child: avatarUrl.isEmpty ? const Icon(Icons.person) : null,
-          ),
-          title: Text(
-            username,
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
-          subtitle: Text(profile['role'] ?? 'Mentor'),
-          trailing: IconButton(
-            icon: const Icon(Icons.chat, color: Colors.indigo),
-            onPressed: () async {
-              final friend = await service.startChatWithFriend(id);
-              if (friend == null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("You can only chat with friends")),
-                );
-                return;
-              }
-              if (!mounted) return;
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => ChatScreen(
-                    otherUserId: friend['id']!,
-                    otherUserName: friend['username']!,
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      );
-    },
-  );
-}
   /// 💡 Suggestions Tab
   Widget _buildSuggestions() {
+    // Use search results if available, otherwise use suggestions
     final list = searchResults.isNotEmpty ? searchResults : suggestions;
 
     if (list.isEmpty) {
-      return const Center(child: Text("No suggestions available"));
+      return const Center(
+        child: Text(
+          "No suggestions available",
+          style: TextStyle(fontSize: 16),
+        ),
+      );
     }
 
     return ListView.builder(
@@ -291,22 +312,14 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
           margin: const EdgeInsets.all(6),
           child: ListTile(
             leading: CircleAvatar(
-              backgroundImage:
-                  avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
+              backgroundImage: avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
               child: avatarUrl.isEmpty ? const Icon(Icons.person) : null,
             ),
             title: Text(username),
-            subtitle: Text(user['role'] ?? 'Mentor'),
+            subtitle: Text(user['role'] ?? 'User'),
             trailing: IconButton(
               icon: const Icon(Icons.person_add, color: Colors.blue),
-              onPressed: () async {
-                await service.sendRequest(id);
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text("Friend request sent to $username")),
-                );
-                await loadData();
-              },
+              onPressed: () => _handleSendRequest(id, username),
             ),
             onTap: () {
               Navigator.pop(context, {'id': id, 'username': username});
@@ -315,5 +328,102 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
         );
       },
     );
+  }
+
+  // ========== ACTION HANDLERS ==========
+
+  Future<void> _handleAcceptRequest(String requestId, String senderId, String username) async {
+    try {
+      print('✅ Accepting request from $username...');
+      
+      await service.acceptRequest(requestId, senderId);
+      
+      // Wait for database propagation (especially important on mobile)
+      await Future.delayed(const Duration(milliseconds: 500));
+      
+      if (!mounted) return;
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("You are now friends with $username")),
+      );
+      
+      // Reload data to update UI
+      await loadData();
+    } catch (e) {
+      print('❌ Error accepting request: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Failed to accept request")),
+      );
+    }
+  }
+
+  Future<void> _handleRejectRequest(String requestId) async {
+    try {
+      await service.rejectRequest(requestId);
+      if (!mounted) return;
+      await loadData();
+    } catch (e) {
+      print('❌ Error rejecting request: $e');
+    }
+  }
+
+  Future<void> _handleChatWithSender(String senderId) async {
+    final friend = await service.startChatWithFriend(senderId);
+    if (friend == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("You can only chat with friends")),
+      );
+      return;
+    }
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => MenteeMessagingScreen(
+          otherUserId: friend['id']!,
+          otherUserName: friend['username']!,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleChatWithFriend(String id) async {
+    final friend = await service.startChatWithFriend(id);
+    if (friend == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("You can only chat with friends")),
+      );
+      return;
+    }
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => MenteeMessagingScreen(
+          otherUserId: friend['id']!,
+          otherUserName: friend['username']!,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleSendRequest(String id, String username) async {
+    try {
+      await service.sendRequest(id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Friend request sent to $username")),
+      );
+      await loadData();
+    } catch (e) {
+      print('❌ Error sending request: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Failed to send request")),
+      );
+    }
   }
 }

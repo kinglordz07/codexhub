@@ -15,6 +15,7 @@ class MentorInvites extends StatefulWidget {
 
 class _MentorInvitesState extends State<MentorInvites> {
   final service = LiveLobbyService();
+  final supabase = Supabase.instance.client;
   List<Map<String, dynamic>> invites = [];
   bool isLoading = true;
 
@@ -48,95 +49,148 @@ class _MentorInvitesState extends State<MentorInvites> {
     }
   }
 
-  /// 🔹 Accept or decline an invite
+  /// 🔹 FIXED: Accept or decline an invite with proper flow
   Future<void> _handleInvite(String inviteId, bool accept) async {
     try {
-      // 1️⃣ Update the session status (returns session ID)
-      final sessionIdRaw = await service.updateSessionStatus(inviteId, accept);
+      debugPrint('🎯 Handling invite: $inviteId, accept: $accept');
 
+      // 1️⃣ Update the invitation status first
+      await supabase
+          .from('live_invitations')
+          .update({
+            'status': accept ? 'accepted' : 'declined',
+            'responded_at': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('id', inviteId);
+
+      // 2️⃣ Remove invite locally IMMEDIATELY
+      setState(() {
+        invites.removeWhere((invite) => invite['id'] == inviteId);
+      });
+
+      // 3️⃣ Show feedback
       if (!mounted) return;
-
-      // 2️⃣ Show feedback
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(accept ? '✅ Session accepted!' : '❌ Session declined.'),
         ),
       );
 
-      // 3️⃣ Remove invite locally
-      setState(() {
-        invites.removeWhere((invite) => invite['id'] == inviteId);
-      });
+      debugPrint('[INVITE] accept=$accept, inviteId=$inviteId');
 
-      debugPrint('[INVITE] accept=$accept, inviteId=$inviteId, session=$sessionIdRaw');
+      if (!accept) {
+        // ❌ DECLINED: Just remove the invite and stop here
+        debugPrint('❌ Invite declined, stopping here');
+        return;
+      }
 
-      if (!accept || sessionIdRaw == null) return;
+      // ✅ ACCEPTED: Continue with session setup
+      debugPrint('✅ Invite accepted, setting up session...');
 
-      final supabase = Supabase.instance.client;
+      // 4️⃣ Get the session details from the invitation
+      final invitation = await supabase
+          .from('live_invitations')
+          .select('session_id, mentee_id, mentee_name')
+          .eq('id', inviteId)
+          .maybeSingle();
 
-      // 4️⃣ Convert session ID safely (Supabase UUIDs are Strings)
-      final sessionId = sessionIdRaw.toString();
+      if (invitation == null) {
+        debugPrint('❌ Invitation not found: $inviteId');
+        return;
+      }
 
-      // ✅ Update mentor_id in live_sessions
+      final sessionId = invitation['session_id']?.toString();
+      final menteeId = invitation['mentee_id']?.toString();
+      final menteeName = invitation['mentee_name']?.toString() ?? 'Mentee';
+
+      if (sessionId == null || menteeId == null) {
+        debugPrint('❌ Missing session_id or mentee_id in invitation');
+        return;
+      }
+
+      debugPrint('🎯 Session ID: $sessionId, Mentee ID: $menteeId');
+
+      // 5️⃣ Update the live_sessions table with mentor_id
       await supabase
           .from('live_sessions')
-          .update({'mentor_id': widget.mentorId})
+          .update({
+            'mentor_id': widget.mentorId,
+            'is_live': true,
+            'waiting': false,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          })
           .eq('id', sessionId);
 
-      // ✅ Fetch updated session details
+      debugPrint('✅ Updated live_sessions with mentor_id');
+
+      // 6️⃣ Get room_id from live_sessions
       final sessionDetails = await supabase
           .from('live_sessions')
-          .select('id, room_id, mentee_id, mentor_id, code, is_live, waiting')
+          .select('room_id')
           .eq('id', sessionId)
           .maybeSingle();
-      final menteeName = 'Session'; // fallback
-      if (sessionDetails == null ||
-          sessionDetails['room_id'] == null ||
-          sessionDetails['mentee_id'] == null) {
-        debugPrint('⚠️ Missing required session data: $sessionDetails');
+
+      if (sessionDetails == null || sessionDetails['room_id'] == null) {
+        debugPrint('❌ No room_id found for session: $sessionId');
         return;
       }
 
       final roomId = sessionDetails['room_id'].toString();
-      final menteeId = sessionDetails['mentee_id'].toString();
-      final mentorId = sessionDetails['mentor_id']?.toString() ?? widget.mentorId;
+      debugPrint('🎯 Room ID: $roomId');
 
-      // ✅ Auto-join mentor to room_members
+      // 7️⃣ Auto-join mentor to room_members
       final existing = await supabase
           .from('room_members')
           .select('id')
           .eq('room_id', roomId)
-          .eq('user_id', mentorId)
+          .eq('user_id', widget.mentorId)
           .maybeSingle();
 
       if (existing == null) {
         await supabase.from('room_members').insert({
           'room_id': roomId,
-          'user_id': mentorId,
+          'user_id': widget.mentorId,
+          'joined_at': DateTime.now().toUtc().toIso8601String(),
         });
-        debugPrint('[INVITE] Mentor auto-joined to room_members.');
+        debugPrint('✅ Mentor auto-joined to room_members');
       } else {
-        debugPrint('[INVITE] Mentor already in room_members.');
+        debugPrint('✅ Mentor already in room_members');
       }
 
-      // ✅ Navigate to CollabRoomTabs
+      // 8️⃣ Update room to mark as active session
+      await supabase
+          .from('rooms')
+          .update({'has_active_session': true})
+          .eq('id', roomId);
+
+      debugPrint('✅ Room marked as having active session');
+
+      // 9️⃣ Navigate to CollabRoomTabs
+      if (!mounted) return;
+
+      debugPrint('🚀 Navigating to CollabRoomTabs...');
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
           builder: (_) => CollabRoomTabs(
             roomId: roomId,
-            roomName: menteeName,
+            roomName: 'Session with $menteeName',
             menteeId: menteeId,
-            mentorId: mentorId,
+            mentorId: widget.mentorId,
             isMentor: true,
+            sessionId: sessionId, // ✅ CRITICAL: Add sessionId
           ),
         ),
       );
+
     } catch (e, st) {
-      debugPrint('❌ Error updating session status: $e\n$st');
+      debugPrint('❌ Error in _handleInvite: $e\n$st');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to process invite.')),
+        SnackBar(
+          content: Text('Failed to process invite: ${e.toString()}'),
+          duration: const Duration(seconds: 5),
+        ),
       );
     }
   }
@@ -154,6 +208,13 @@ class _MentorInvitesState extends State<MentorInvites> {
           style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
         ),
         backgroundColor: Colors.indigo,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadInvites,
+            tooltip: 'Refresh invites',
+          ),
+        ],
       ),
       body: SafeArea(
         child: RefreshIndicator(
@@ -167,13 +228,38 @@ class _MentorInvitesState extends State<MentorInvites> {
                       itemCount: invites.length,
                       itemBuilder: (context, index) {
                         final invite = invites[index];
-                        final menteeName = invite['mentee_name']?.toString() ?? 'Unknown';
-                        return _buildInviteCard(invite, menteeName, isSmallScreen, isVerySmallScreen);
+                        final menteeName = invite['mentee_name']?.toString() ?? 'Unknown Mentee';
+                        final createdAt = _getInviteTime(invite);
+                        return _buildInviteCard(
+                          invite, 
+                          menteeName, 
+                          createdAt, 
+                          isSmallScreen, 
+                          isVerySmallScreen
+                        );
                       },
                     ),
         ),
       ),
     );
+  }
+
+  String _getInviteTime(Map<String, dynamic> invite) {
+    final createdAt = invite['created_at'];
+    if (createdAt == null) return 'Recently';
+    
+    try {
+      final dateTime = DateTime.parse(createdAt.toString());
+      final now = DateTime.now();
+      final difference = now.difference(dateTime);
+      
+      if (difference.inMinutes < 1) return 'Just now';
+      if (difference.inMinutes < 60) return '${difference.inMinutes}m ago';
+      if (difference.inHours < 24) return '${difference.inHours}h ago';
+      return '${difference.inDays}d ago';
+    } catch (e) {
+      return 'Recently';
+    }
   }
 
   Widget _buildEmptyState(bool isSmallScreen) {
@@ -184,25 +270,36 @@ class _MentorInvitesState extends State<MentorInvites> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
-              Icons.person_outline,
-              size: isSmallScreen ? 48 : 64,
+              Icons.inbox_outlined,
+              size: isSmallScreen ? 64 : 80,
               color: Colors.grey[400],
             ),
-            SizedBox(height: isSmallScreen ? 12 : 16),
+            SizedBox(height: isSmallScreen ? 16 : 20),
             Text(
               'No pending invites',
               style: TextStyle(
-                fontSize: isSmallScreen ? 16 : 18,
+                fontSize: isSmallScreen ? 18 : 20,
                 fontWeight: FontWeight.bold,
                 color: Colors.grey[600],
               ),
             ),
             SizedBox(height: isSmallScreen ? 8 : 12),
             Text(
-              'Pull down to refresh',
+              'When mentees request live sessions,\ninvites will appear here',
+              textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: isSmallScreen ? 14 : 16,
                 color: Colors.grey[500],
+              ),
+            ),
+            SizedBox(height: isSmallScreen ? 16 : 20),
+            ElevatedButton.icon(
+              onPressed: _loadInvites,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Refresh'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.indigo,
+                foregroundColor: Colors.white,
               ),
             ),
           ],
@@ -211,59 +308,108 @@ class _MentorInvitesState extends State<MentorInvites> {
     );
   }
 
-  Widget _buildInviteCard(Map<String, dynamic> invite, String menteeName, bool isSmallScreen, bool isVerySmallScreen) {
+  Widget _buildInviteCard(
+    Map<String, dynamic> invite, 
+    String menteeName, 
+    String timeAgo,
+    bool isSmallScreen, 
+    bool isVerySmallScreen
+  ) {
     final inviteId = invite['id'].toString();
 
     return Card(
       margin: EdgeInsets.all(isSmallScreen ? 6 : 8),
-      elevation: 2,
+      elevation: 3,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
       ),
-      child: ListTile(
-        leading: Icon(
-          Icons.person,
-          color: Colors.indigo,
-          size: isSmallScreen ? 24 : 28,
-        ),
-        title: Text(
-          'Mentee: $menteeName',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: isSmallScreen ? 14 : 16,
-          ),
-        ),
-        subtitle: Text(
-          'Tap to accept or decline',
-          style: TextStyle(
-            fontSize: isSmallScreen ? 12 : 14,
-            color: Colors.grey[600],
-          ),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
+      child: Padding(
+        padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            IconButton(
-              icon: Icon(
-                Icons.check,
-                color: Colors.green,
-                size: isSmallScreen ? 20 : 24,
-              ),
-              onPressed: () => _handleInvite(inviteId, true),
+            Row(
+              children: [
+                Icon(
+                  Icons.person,
+                  color: Colors.indigo,
+                  size: isSmallScreen ? 20 : 24,
+                ),
+                SizedBox(width: isSmallScreen ? 8 : 12),
+                Expanded(
+                  child: Text(
+                    'Live Session Request',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: isSmallScreen ? 16 : 18,
+                    ),
+                  ),
+                ),
+                Text(
+                  timeAgo,
+                  style: TextStyle(
+                    fontSize: isSmallScreen ? 12 : 14,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
             ),
-            IconButton(
-              icon: Icon(
-                Icons.close,
-                color: Colors.red,
-                size: isSmallScreen ? 20 : 24,
+            SizedBox(height: isSmallScreen ? 8 : 12),
+            Text(
+              'From: $menteeName',
+              style: TextStyle(
+                fontSize: isSmallScreen ? 14 : 16,
+                color: Colors.grey[700],
               ),
-              onPressed: () => _handleInvite(inviteId, false),
+            ),
+            SizedBox(height: isSmallScreen ? 4 : 6),
+            Text(
+              'Tap buttons below to accept or decline',
+              style: TextStyle(
+                fontSize: isSmallScreen ? 12 : 14,
+                color: Colors.grey[500],
+              ),
+            ),
+            SizedBox(height: isSmallScreen ? 12 : 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                ElevatedButton.icon(
+                  onPressed: () => _handleInvite(inviteId, false),
+                  icon: Icon(
+                    Icons.close,
+                    size: isSmallScreen ? 16 : 18,
+                  ),
+                  label: Text(
+                    'Decline',
+                    style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red[50],
+                    foregroundColor: Colors.red,
+                    elevation: 0,
+                  ),
+                ),
+                SizedBox(width: isSmallScreen ? 8 : 12),
+                ElevatedButton.icon(
+                  onPressed: () => _handleInvite(inviteId, true),
+                  icon: Icon(
+                    Icons.check,
+                    size: isSmallScreen ? 16 : 18,
+                  ),
+                  label: Text(
+                    'Accept & Join',
+                    style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green[50],
+                    foregroundColor: Colors.green,
+                    elevation: 0,
+                  ),
+                ),
+              ],
             ),
           ],
-        ),
-        contentPadding: EdgeInsets.symmetric(
-          horizontal: isSmallScreen ? 12 : 16,
-          vertical: isSmallScreen ? 8 : 12,
         ),
       ),
     );

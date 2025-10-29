@@ -1,5 +1,3 @@
-// ignore_for_file: use_build_context_synchronously
-
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:codexhub01/services/messageservice.dart';
@@ -7,21 +5,21 @@ import 'package:codexhub01/services/call_services.dart';
 import 'package:codexhub01/parts/call_page.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-class ChatScreen extends StatefulWidget {
+class MenteeMessagingScreen extends StatefulWidget {
   final String otherUserId;
   final String otherUserName;
 
-  const ChatScreen({
+  const MenteeMessagingScreen({
     super.key,
     required this.otherUserId,
     required this.otherUserName,
   });
 
   @override
-  State<ChatScreen> createState() => _ChatScreenState();
+  State<MenteeMessagingScreen> createState() => _MenteeMessagingScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _MenteeMessagingScreenState extends State<MenteeMessagingScreen> {
   final MessageService service = MessageService();
   final CallService _callService = CallService();
 
@@ -30,12 +28,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
   List<Map<String, dynamic>> messages = [];
   StreamSubscription? _messageSub;
-  StreamSubscription? _callStatusSub;
   StreamSubscription? _incomingCallSub;
 
   bool isDialogOpen = false;
   bool isSending = false;
-  final Set<String> activeCallIDs = {};
+  final Set<String> _showingDialogs = {};
+  // REMOVED: _currentCallID since it's unused
 
   @override
   void initState() {
@@ -44,209 +42,177 @@ class _ChatScreenState extends State<ChatScreen> {
     _listenIncomingCalls();
   }
 
-  // 🟢 Real-time listener for chat messages
   void _listenMessages() {
-    _messageSub?.cancel(); // ensure old listeners are removed first
+    _messageSub?.cancel();
     _messageSub = service.messageStream(widget.otherUserId).listen((newMsgs) {
-      setState(() {
-        messages = newMsgs;
-      });
-      _scrollToBottom();
+      if (mounted) {
+        setState(() => messages = newMsgs);
+        _scrollToBottom();
+      }
     });
   }
 
-  // 🟢 Real-time incoming call listener
   void _listenIncomingCalls() {
     final currentUser = Supabase.instance.client.auth.currentUser;
     if (currentUser == null) return;
-    final currentUserId = currentUser.id;
 
+    _incomingCallSub?.cancel();
     _incomingCallSub = Supabase.instance.client
         .from('calls')
         .stream(primaryKey: ['id'])
-        .eq('receiver_id', currentUserId)
-        .listen((events) async {
-      if (events.isEmpty) return;
+        .listen((events) {
+      if (!mounted) return;
+      
+      final ringingCalls = events.where((call) {
+        return call['receiver_id'] == currentUser.id && 
+               call['status'] == 'ringing';
+      }).toList();
 
-      for (final call in events) {
-        final callID = call['id']?.toString() ?? '';
-        final status = call['status'] ?? '';
-
-        if (status == 'ringing' && !activeCallIDs.contains(callID) && mounted) {
-          activeCallIDs.add(callID);
-          await _showIncomingCallDialog(call);
-          activeCallIDs.remove(callID);
+      for (final call in ringingCalls) {
+        final callID = call['id'].toString();
+        if (!_showingDialogs.contains(callID)) {
+          _showingDialogs.add(callID);
+          _showIncomingCallDialog(call);
         }
       }
     });
   }
 
-  // 🟢 Handles call accept/decline dialogs
-  Future<void> _showIncomingCallDialog(Map<String, dynamic> call) async {
-    if (isDialogOpen) return;
-    isDialogOpen = true;
+  // In the _showIncomingCallDialog method, update the decline part:
+Future<void> _showIncomingCallDialog(Map<String, dynamic> call) async {
+  final callID = call['id'].toString();
+  final callerName = call['caller_name'] ?? 'Unknown';
+  final callType = call['call_type'] ?? 'audio';
 
-    try {
-      final callerName = call['caller_name'] ?? 'Unknown';
-      final callType = call['call_type'] ?? 'audio';
-
-      await showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) {
-          return AlertDialog(
-            title: Text("Incoming $callType call"),
-            content: Text("$callerName is calling you"),
-            actions: [
-              TextButton(
-                onPressed: () async {
-                  Navigator.of(context).pop();
-                  await _callService.declineCall(call);
-                },
-                child: const Text("Decline"),
-              ),
-              TextButton(
-                onPressed: () async {
-                  Navigator.of(context).pop();
-                  final currentUser = Supabase.instance.client.auth.currentUser;
-                  if (!mounted || currentUser == null) return;
-
-                  await _callService.acceptCall(call);
-
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => CallPage(
-                        callID: call['id'],
-                        userID: currentUser.id,
-                        userName: currentUser.userMetadata?['username'] ??
-                            currentUser.email ??
-                            'User',
-                        callType: callType,
-                      ),
-                    ),
-                  );
-                },
-                child: const Text("Accept"),
-              ),
-            ],
-          );
-        },
-      );
-    } finally {
-      if (mounted) isDialogOpen = false;
-    }
+  if (isDialogOpen || !mounted) {
+    _showingDialogs.remove(callID);
+    return;
   }
 
-  // 🟢 Send message logic (with indicator)
-  Future<void> _sendMessage() async {
-    final text = messageController.text.trim();
-    if (text.isEmpty || isSending) return;
+  isDialogOpen = true;
 
-    setState(() => isSending = true);
+  final result = await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) => AlertDialog(
+      title: Text("Incoming ${callType == 'video' ? 'Video' : 'Audio'} Call"),
+      content: Text("$callerName is calling you"),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text("Decline", style: TextStyle(color: Colors.red)),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text("Accept", style: TextStyle(color: Colors.green)),
+        ),
+      ],
+    ),
+  );
 
-    final currentUserId = service.currentUserId;
-    final localMsg = {
-      'id': DateTime.now().millisecondsSinceEpoch,
-      'sender_id': currentUserId,
-      'receiver_id': widget.otherUserId,
-      'message': text,
-      'created_at': DateTime.now().toUtc().toIso8601String(),
-      'status': 'sending',
-    };
+  isDialogOpen = false;
+  _showingDialogs.remove(callID);
 
-    setState(() {
-      messages.add(localMsg);
-    });
-    _scrollToBottom();
-    messageController.clear();
+  if (!mounted) return;
 
+  if (result == true) {
+    await _handleCallAcceptance(call);
+  } else {
+    // FIXED: Properly handle call decline
     try {
-      await service.sendMessage(widget.otherUserId, text);
+      await _callService.declineCall(callID);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Call declined")),
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to send message: $e')),
+          SnackBar(content: Text("Failed to decline call: $e")),
         );
       }
-    } finally {
-      if (mounted) setState(() => isSending = false);
+    }
+  }
+}
+
+  Future<void> _handleCallAcceptance(Map<String, dynamic> call) async {
+    final currentUser = Supabase.instance.client.auth.currentUser;
+    if (currentUser == null || !mounted) return;
+
+    final callID = call['id'].toString();
+    
+    try {
+      // Accept call first
+      await _callService.acceptCall(callID);
+      
+      // Navigate immediately without waiting for stream updates
+      if (!mounted) return;
+      
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CallPage(
+            callID: callID,
+            userID: currentUser.id,
+            userName: currentUser.userMetadata?['username'] ?? 
+                     currentUser.email ?? 'User',
+            callType: call['call_type'] ?? 'audio',
+            // REMOVED: isCaller parameter since it's not defined in CallPage
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to accept call: $e")),
+        );
+      }
     }
   }
 
-  // 🟢 Call setup logic
   Future<void> _startCall(String type) async {
     final currentUser = Supabase.instance.client.auth.currentUser;
-    if (currentUser == null) return;
-
-    final currentUserId = currentUser.id;
-    final currentUserName =
-        currentUser.userMetadata?['username'] ?? currentUser.email ?? 'User';
+    if (currentUser == null || !mounted) return;
 
     try {
       final callID = await _callService.startCall(
-        callerId: currentUserId,
+        callerId: currentUser.id,
         receiverId: widget.otherUserId,
         callType: type,
       );
 
-      if (callID.isEmpty) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text("Failed to create call")));
-        return;
-      }
+      if (!mounted) return;
 
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => AlertDialog(
-          content: Text("Calling ${widget.otherUserName}..."),
+      // Navigate directly to call page as caller
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CallPage(
+            callID: callID,
+            userID: currentUser.id,
+            userName: currentUser.userMetadata?['username'] ?? 
+                     currentUser.email ?? 'User',
+            callType: type,
+            // REMOVED: isCaller parameter since it's not defined in CallPage
+          ),
         ),
       );
 
-      _callStatusSub?.cancel();
-
-      _callStatusSub = _callService.listenCallStatus(callID).listen((events) async {
-        if (events.isEmpty) return;
-        final call = events.first;
-        final status = call['status'];
-
-        if (status == 'accepted' && mounted) {
-          Navigator.of(context).pop();
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => CallPage(
-                callID: callID,
-                userID: currentUserId,
-                userName: currentUserName,
-                callType: type,
-              ),
-            ),
-          );
-        } else if (status == 'declined' && mounted) {
-          Navigator.of(context).pop();
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text("Call declined")));
-        } else if (status == 'ended' && mounted) {
-          Navigator.of(context).pop();
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text("Call ended")));
-        }
-      });
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text("Failed to start call: $e")));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to start call: $e")),
+        );
       }
     }
   }
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
+      if (_scrollController.hasClients && mounted) {
         _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent + 50,
+          _scrollController.position.maxScrollExtent,
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
         );
@@ -254,21 +220,31 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  String _formatTime(String? timestamp) {
-    if (timestamp == null) return '';
-    final dateTime = DateTime.tryParse(timestamp)?.toLocal();
-    if (dateTime == null) return '';
-    final hour = dateTime.hour % 12 == 0 ? 12 : dateTime.hour % 12;
-    final minute = dateTime.minute.toString().padLeft(2, '0');
-    final ampm = dateTime.hour >= 12 ? 'PM' : 'AM';
-    return '$hour:$minute $ampm';
+  Future<void> _sendMessage() async {
+    final text = messageController.text.trim();
+    if (text.isEmpty || isSending) return;
+
+    setState(() => isSending = true);
+    messageController.clear();
+
+    try {
+      await service.sendMessage(widget.otherUserId, text);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to send: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => isSending = false);
+    }
   }
 
   @override
   void dispose() {
     _messageSub?.cancel();
-    _callStatusSub?.cancel();
     _incomingCallSub?.cancel();
+    _callService.dispose();
     messageController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -276,79 +252,62 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final screenSize = MediaQuery.of(context).size;
-    final isSmallScreen = screenSize.width < 600;
-    final isVerySmallScreen = screenSize.width < 400;
-
     final currentUserId = service.currentUserId;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final screen = MediaQuery.of(context).size;
+    // USED: isSmall variable is now being used
+    final isSmall = screen.width < 400;
 
-    final backgroundColor = isDark ? const Color(0xFF121212) : Colors.white;
     final bubbleColorMe = isDark ? Colors.indigoAccent.shade400 : Colors.indigo;
-    final bubbleColorOther = isDark ? Colors.grey.shade800 : Colors.grey[300];
-    final textColorMe = Colors.white;
-    final textColorOther = isDark ? Colors.white : Colors.black;
+    final bubbleColorOther = isDark ? Colors.grey.shade800 : Colors.grey[300]!;
 
     return Scaffold(
-      backgroundColor: backgroundColor,
       appBar: AppBar(
         title: Text(
           widget.otherUserName,
-          style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
+          style: TextStyle(fontSize: isSmall ? 16 : 18),
         ),
         backgroundColor: isDark ? Colors.indigo.shade700 : Colors.indigo,
-        leading: IconButton(
-          icon: Icon(
-            Icons.arrow_back,
-            size: isSmallScreen ? 20 : 24,
-          ),
-          onPressed: () => Navigator.pop(context),
-        ),
         actions: [
-          if (!isVerySmallScreen)
-            IconButton(
-              icon: Icon(
-                Icons.call,
-                size: isSmallScreen ? 20 : 24,
-              ),
-              tooltip: "Audio Call",
-              onPressed: () async => _startCall('audio'),
-            ),
           IconButton(
-            icon: Icon(
-              Icons.videocam,
-              size: isSmallScreen ? 20 : 24,
-            ),
-            tooltip: "Video Call",
-            onPressed: () async => _startCall('video'),
+            icon: const Icon(Icons.call),
+            onPressed: () => _startCall('audio'),
+          ),
+          IconButton(
+            icon: const Icon(Icons.videocam),
+            onPressed: () => _startCall('video'),
           ),
         ],
       ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
+      body: Column(
+        children: [
+          Expanded(
+            child: Container(
+              padding: EdgeInsets.symmetric(
+                horizontal: isSmall ? 8 : 12,
+                vertical: isSmall ? 4 : 8,
+              ),
               child: ListView.builder(
                 controller: _scrollController,
-                padding: EdgeInsets.all(isSmallScreen ? 6 : 8),
                 itemCount: messages.length,
                 itemBuilder: (context, index) {
                   final msg = messages[index];
-                  final isMe = msg['sender_id'].toString() == currentUserId;
-                  final messageText = msg['message'] ?? '';
-                  final createdAt = msg['created_at'] ?? '';
-
+                  final isMe = msg['sender_id'] == currentUserId;
+                  
                   return Align(
                     alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                     child: Container(
-                      constraints: BoxConstraints(
-                        maxWidth: screenSize.width * 0.75,
-                      ),
                       margin: EdgeInsets.symmetric(
-                        vertical: isSmallScreen ? 2 : 4,
-                        horizontal: isSmallScreen ? 4 : 8,
+                        vertical: isSmall ? 2 : 4, 
+                        horizontal: isSmall ? 2 : 4,
                       ),
-                      padding: EdgeInsets.all(isSmallScreen ? 10 : 12),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: isSmall ? 12 : 16,
+                        vertical: isSmall ? 8 : 12,
+                      ),
+                      constraints: BoxConstraints(
+                        maxWidth: isSmall ? screen.width * 0.8 : screen.width * 0.7,
+                      ),
                       decoration: BoxDecoration(
                         color: isMe ? bubbleColorMe : bubbleColorOther,
                         borderRadius: BorderRadius.circular(16),
@@ -356,31 +315,25 @@ class _ChatScreenState extends State<ChatScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          if (!isVerySmallScreen)
+                          Text(
+                            msg['message'] ?? '',
+                            style: TextStyle(
+                              fontSize: isSmall ? 14 : 16,
+                              color: isMe ? Colors.white : 
+                                    (isDark ? Colors.white : Colors.black87),
+                            ),
+                          ),
+                          if (msg['status'] == 'sending') ...[
+                            const SizedBox(height: 4),
                             Text(
-                              isMe ? 'You' : widget.otherUserName,
+                              'Sending...',
                               style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: isSmallScreen ? 12 : 14,
-                                color: isMe ? textColorMe : textColorOther,
+                                fontSize: isSmall ? 10 : 12,
+                                color: isMe ? Colors.white70 : 
+                                      (isDark ? Colors.white70 : Colors.black54),
                               ),
                             ),
-                          if (!isVerySmallScreen) SizedBox(height: isSmallScreen ? 2 : 4),
-                          Text(
-                            messageText,
-                            style: TextStyle(
-                              fontSize: isSmallScreen ? 14 : 16,
-                              color: isMe ? textColorMe : textColorOther,
-                            ),
-                          ),
-                          SizedBox(height: isSmallScreen ? 1 : 2),
-                          Text(
-                            _formatTime(createdAt),
-                            style: TextStyle(
-                              fontSize: isSmallScreen ? 9 : 10,
-                              color: isMe ? Colors.white70 : Colors.grey,
-                            ),
-                          ),
+                          ],
                         ],
                       ),
                     ),
@@ -388,65 +341,47 @@ class _ChatScreenState extends State<ChatScreen> {
                 },
               ),
             ),
-            Container(
-              padding: EdgeInsets.all(isSmallScreen ? 6 : 8),
-              decoration: BoxDecoration(
-                color: isDark ? Colors.grey.shade900 : Colors.grey[100],
-                border: Border(
-                  top: BorderSide(
-                    color: isDark ? Colors.grey.shade800 : Colors.grey[300]!,
+          ),
+          Padding(
+            padding: EdgeInsets.all(isSmall ? 8 : 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: messageController,
+                    decoration: InputDecoration(
+                      hintText: "Type a message...",
+                      hintStyle: TextStyle(
+                        fontSize: isSmall ? 14 : 16,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: isSmall ? 16 : 20,
+                        vertical: isSmall ? 12 : 16,
+                      ),
+                    ),
+                    onSubmitted: (_) => _sendMessage(),
                   ),
                 ),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: messageController,
-                      style: TextStyle(
-                        color: isDark ? Colors.white : Colors.black,
-                        fontSize: isSmallScreen ? 14 : 16,
-                      ),
-                      decoration: InputDecoration(
-                        hintText: isSending ? "Sending..." : "Type a message...",
-                        hintStyle: TextStyle(
-                          color: isDark ? Colors.white70 : Colors.grey,
-                          fontSize: isSmallScreen ? 14 : 16,
-                        ),
-                        filled: true,
-                        fillColor: isDark ? Colors.grey.shade800 : Colors.white,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24),
-                          borderSide: BorderSide.none,
-                        ),
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: isSmallScreen ? 14 : 16,
-                          vertical: isSmallScreen ? 12 : 14,
-                        ),
-                      ),
-                      onSubmitted: (_) => _sendMessage(),
-                      enabled: !isSending,
+                const SizedBox(width: 8),
+                CircleAvatar(
+                  radius: isSmall ? 20 : 24,
+                  backgroundColor: isDark ? Colors.indigoAccent.shade400 : Colors.indigo,
+                  child: IconButton(
+                    icon: Icon(
+                      Icons.send,
+                      size: isSmall ? 18 : 22,
+                      color: Colors.white,
                     ),
+                    onPressed: _sendMessage,
                   ),
-                  SizedBox(width: isSmallScreen ? 6 : 8),
-                  CircleAvatar(
-                    radius: isSmallScreen ? 20 : 24,
-                    backgroundColor:
-                        isDark ? Colors.indigoAccent.shade400 : Colors.indigo,
-                    child: IconButton(
-                      icon: Icon(
-                        Icons.send,
-                        color: Colors.white,
-                        size: isSmallScreen ? 18 : 20,
-                      ),
-                      onPressed: isSending ? null : _sendMessage,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

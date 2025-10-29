@@ -14,15 +14,24 @@ class SessionsTabScreen extends StatefulWidget {
 class _SessionsTabScreenState extends State<SessionsTabScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tabController;
+  int _currentTabIndex = 0;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(_handleTabChange);
+  }
+
+  void _handleTabChange() {
+    setState(() {
+      _currentTabIndex = _tabController.index;
+    });
   }
 
   @override
   void dispose() {
+    _tabController.removeListener(_handleTabChange);
     _tabController.dispose();
     super.dispose();
   }
@@ -43,11 +52,11 @@ class _SessionsTabScreenState extends State<SessionsTabScreen>
           ],
         ),
       ),
-      body: TabBarView(
-        controller: _tabController,
+      body: IndexedStack(
+        index: _currentTabIndex,
         children: const [
-          ScheduleSessionScreen(), // Form to schedule new session
-          MySessionsScreen(),      // List of user's sessions
+          ScheduleSessionScreen(), // Only loads when active
+          MySessionsScreen(),      // Only loads when active
         ],
       ),
     );

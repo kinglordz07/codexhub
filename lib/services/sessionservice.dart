@@ -1,4 +1,5 @@
 // lib/services/sessionservice.dart
+import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SessionService {
@@ -31,62 +32,101 @@ class SessionService {
     });
   }
 
-  /// 🔹 Fetch all sessions for the current mentee
+  /// 🔹 FIXED: Fetch all sessions for the current mentee
   Future<List<Map<String, dynamic>>> getUserSessions() async {
-  final userId = currentUserId;
-  if (userId == null) return [];
+    final userId = currentUserId;
+    if (userId == null) return [];
 
-  final response = await _supabase
-      .from('mentor_sessions')
-      .select('''
-        id,
-        session_type,
-        session_date,
-        session_time,
-        notes,
-        status,
-        mentor:profiles_new!mentor_sessions_mentor_id_fkey(username)
-      ''')
-      .eq('user_id', userId)
-      .order('session_date', ascending: true);
+    try {
+      // Try different join approaches
+      final response = await _supabase
+          .from('mentor_sessions')
+          .select('''
+            id,
+            session_type,
+            session_date,
+            session_time,
+            notes,
+            status,
+            mentor_id,
+            user_id,
+            profiles_new!mentor_sessions_mentor_id_fkey(
+              username
+            )
+          ''')
+          .eq('user_id', userId)
+          .order('session_date', ascending: true);
 
-  // Map mentor username into mentor_name field
-  return List<Map<String, dynamic>>.from(
-    response.map((s) => {
-      ...s,
-      'mentor_name': s['mentor']?['username'] ?? 'Unknown',
-    }),
-  );
-}
+      // Manual mapping of mentor name
+      return List<Map<String, dynamic>>.from(
+        response.map((session) {
+          final mentorData = session['profiles_new'];
+          final mentorName = mentorData != null && mentorData is Map 
+              ? mentorData['username'] 
+              : 'Unknown Mentor';
+              
+          return {
+            ...session,
+            'mentor_name': mentorName,
+          };
+        }),
+      );
+    } catch (e) {
+      debugPrint('Error in getUserSessions: $e');
+      
+      // Fallback: Simple query without join
+      final response = await _supabase
+          .from('mentor_sessions')
+          .select('*')
+          .eq('user_id', userId)
+          .order('session_date', ascending: true);
+          
+      return List<Map<String, dynamic>>.from(response.map((session) => {
+        ...session,
+        'mentor_name': 'Mentor', // Fallback name
+      }));
+    }
+  }
 
-  /// Mentor gets all sessions assigned to them (with student username)
-  /// Mentor gets all sessions assigned to them (with student username)
-Future<List<Map<String, dynamic>>> getMentorSessions() async {
-  final mentorId = currentUserId;
-  if (mentorId == null) return [];
+  /// FIXED: Mentor gets all sessions assigned to them
+  Future<List<Map<String, dynamic>>> getMentorSessions() async {
+    final mentorId = currentUserId;
+    if (mentorId == null) return [];
 
-  final response = await _supabase
-      .from('mentor_sessions')
-      .select('''
-        id,
-        user_id,
-        session_type,
-        session_date,
-        session_time,
-        notes,
-        status,
-        rescheduled_at,
-        created_at,
-        profiles_new!mentor_sessions_user_id_fkey(
-          username
-        )
-      ''')
-      .eq('mentor_id', mentorId)
-      .order('session_date', ascending: true)
-      .order('session_time', ascending: true);
+    try {
+      final response = await _supabase
+          .from('mentor_sessions')
+          .select('''
+            id,
+            user_id,
+            session_type,
+            session_date,
+            session_time,
+            notes,
+            status,
+            rescheduled_at,
+            created_at,
+            profiles_new!mentor_sessions_user_id_fkey(
+              username
+            )
+          ''')
+          .eq('mentor_id', mentorId)
+          .order('session_date', ascending: true)
+          .order('session_time', ascending: true);
 
-  return List<Map<String, dynamic>>.from(response);
-}
+      return List<Map<String, dynamic>>.from(response);
+    } catch (e) {
+      debugPrint('Error in getMentorSessions: $e');
+      
+      // Fallback
+      return await _supabase
+          .from('mentor_sessions')
+          .select('*')
+          .eq('mentor_id', mentorId)
+          .order('session_date', ascending: true)
+          .order('session_time', ascending: true);
+    }
+  }
 
   /// Mentor updates status (accept/decline) of a session
   Future<void> updateSessionStatus(String sessionId, String newStatus) async {
@@ -96,7 +136,7 @@ Future<List<Map<String, dynamic>>> getMentorSessions() async {
         .eq('id', sessionId);
   }
 
-  /// ADD THIS METHOD: Mentor reschedules a session
+  /// Mentor reschedules a session
   Future<void> rescheduleSession(String sessionId, String newDate, String newTime) async {
     await _supabase
         .from('mentor_sessions')

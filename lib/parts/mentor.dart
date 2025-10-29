@@ -48,21 +48,33 @@ class MentorDashboardScreen extends StatelessWidget {
     // Adaptive grid layout
     int crossAxisCount;
     if (screenSize.width > 1200) {
-      crossAxisCount = 4; // Large tablets/desktop
+      crossAxisCount = 4; 
     } else if (screenSize.width > 800) {
-      crossAxisCount = 3; // Tablets
+      crossAxisCount = 3; 
     } else if (screenSize.width > 600 || isLandscape) {
-      crossAxisCount = 2; // Small tablets or landscape phones
+      crossAxisCount = 2; 
     } else {
-      crossAxisCount = 2; // Phones in portrait
+      crossAxisCount = 2;
     }
 
     return Scaffold(
       appBar: AppBar(
         title: Text(
           'Mentor Dashboard',
-          style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
+          style: TextStyle(fontSize: isSmallScreen ? 18 : 20,
+          color: Colors.white,
+          fontWeight: FontWeight.bold,
+          ),
         ),
+        flexibleSpace: Container(
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        colors: [Colors.indigo.shade700, Colors.indigo.shade900],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+    ),
+  ),
         centerTitle: true,
         elevation: 4,
         automaticallyImplyLeading: false,

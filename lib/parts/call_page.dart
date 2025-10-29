@@ -26,7 +26,7 @@ class CallPage extends StatelessWidget {
         callID: callID,
         config: callType == 'video'
             ? (ZegoUIKitPrebuiltCallConfig.oneOnOneVideoCall()
-              ..turnOnCameraWhenJoining = false
+              ..turnOnCameraWhenJoining = true
               ..turnOnMicrophoneWhenJoining = true
             )
             : (ZegoUIKitPrebuiltCallConfig.oneOnOneVoiceCall()

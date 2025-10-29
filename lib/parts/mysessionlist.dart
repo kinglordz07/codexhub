@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../services/sessionservice.dart';
 import 'package:codexhub01/mentorship/schedulesession_screen.dart'; 
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:async';
 
 class MySessionsScreen extends StatefulWidget {
   const MySessionsScreen({super.key});
@@ -12,39 +14,101 @@ class MySessionsScreen extends StatefulWidget {
 class _MySessionsScreenState extends State<MySessionsScreen>
     with SingleTickerProviderStateMixin {
   final SessionService _sessionService = SessionService();
+  final SupabaseClient _supabase = Supabase.instance.client;
+  
   bool isLoading = true;
   List<Map<String, dynamic>> sessions = [];
-
   late TabController _tabController;
+  StreamSubscription? _sessionSub;
+  StreamSubscription? _mentorSub;
+  bool _isDisposed = false;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _loadSessions();
+    _loadSessions().then((_) {
+      if (!_isDisposed) {
+        _setupSessionNotifications();
+        _setupMentorSessionNotifications(); 
+      }
+    });
   }
 
   @override
   void dispose() {
+    _isDisposed = true;
     _tabController.dispose();
+    _sessionSub?.cancel();
+    _mentorSub?.cancel();
     super.dispose();
   }
 
+  // FIXED: Setup real-time session notifications
+  void _setupSessionNotifications() {
+    if (_isDisposed) return;
+    
+    final currentUserId = _supabase.auth.currentUser?.id;
+    if (currentUserId == null) return;
+
+    _sessionSub?.cancel();
+    _sessionSub = _supabase
+        .from('mentorship_sessions')
+        .stream(primaryKey: ['id'])
+        .listen((sessions) {
+      if (_isDisposed) return;
+      
+      // Simple refresh without context operations
+      _loadSessions();
+    }, onError: (error) {
+      debugPrint('Session stream error: $error');
+    });
+  }
+
+  // FIXED: Setup mentor session notifications
+  void _setupMentorSessionNotifications() {
+    if (_isDisposed) return;
+    
+    final currentUserId = _supabase.auth.currentUser?.id;
+    if (currentUserId == null) return;
+
+    _mentorSub?.cancel();
+    _mentorSub = _supabase
+        .from('mentorship_sessions')
+        .stream(primaryKey: ['id'])
+        .listen((sessions) {
+      if (_isDisposed) return;
+      
+      // Simple refresh without context operations
+      _loadSessions();
+    }, onError: (error) {
+      debugPrint('Mentor stream error: $error');
+    });
+  }
+
   Future<void> _loadSessions() async {
+    if (_isDisposed) return;
+    
     setState(() => isLoading = true);
 
     try {
       final data = await _sessionService.getUserSessions();
-      setState(() {
-        sessions = data;
-        isLoading = false;
-      });
+      if (!_isDisposed) {
+        setState(() {
+          sessions = data;
+          isLoading = false;
+        });
+      }
     } catch (e) {
-      setState(() => isLoading = false);
-      if (mounted) {
-  ScaffoldMessenger.of(context)
-    .showSnackBar(SnackBar(content: Text("Failed to load sessions: $e")));
-}}
+      if (!_isDisposed) {
+        setState(() => isLoading = false);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Failed to load sessions: $e"))
+          );
+        }
+      }
+    }
   }
 
   List<Map<String, dynamic>> _filterByStatus(String status) {
@@ -62,7 +126,6 @@ class _MySessionsScreenState extends State<MySessionsScreen>
         title: Text(
           "My Sessions",
           style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
-          
         ),
         backgroundColor: Colors.indigo,
         bottom: TabBar(

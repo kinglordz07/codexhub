@@ -14,6 +14,7 @@ class _IntroScreenState extends State<IntroScreen>
   late AnimationController _controller;
   late Animation<double> _fadeAnimation;
   late Animation<double> _scaleAnimation;
+  late Timer _navigationTimer; // Declare timer as class variable
 
   @override
   void initState() {
@@ -34,16 +35,21 @@ class _IntroScreenState extends State<IntroScreen>
 
     _controller.forward();
 
-    Timer(const Duration(seconds: 5), () {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const SignIn()),
-      );
+    // FIXED: Add mounted check and store timer reference
+    _navigationTimer = Timer(const Duration(seconds: 5), () {
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const SignIn()),
+        );
+      }
     });
   }
 
   @override
   void dispose() {
+    // IMPORTANT: Always cancel timers in dispose
+    _navigationTimer.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -51,7 +57,7 @@ class _IntroScreenState extends State<IntroScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1E1E2C), // More tech-themed background
+      backgroundColor: const Color(0xFF1E1E2C),
       body: Center(
         child: FadeTransition(
           opacity: _fadeAnimation,

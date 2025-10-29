@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/services.dart';
@@ -36,6 +37,7 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
 
   String? _creatorId;
   bool _isCreator = false;
+  RealtimeChannel? _messageChannel; // FIXED: Changed to RealtimeChannel
 
   @override
   void initState() {
@@ -145,8 +147,10 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
   }
 
   void _setupRealtimeSubscriptions() {
-    supabase
-        .channel('room_${widget.roomId}_messages')
+    // FIXED: Store the channel instead of subscription
+    _messageChannel = supabase.channel('room_${widget.roomId}_messages');
+    
+    _messageChannel!
         .onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'public',
@@ -158,24 +162,33 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
           callback: (payload) async {
             try {
               if (!mounted) return;
-              final userData = await _fetchUserData(payload.newRecord['user_id']);
-              setState(() {
-                _messages.add({
-                  ...payload.newRecord,
-                  'sender_name': userData['name'],
-                  'sender_avatar': userData['avatar_url'],
+              
+              final newMessage = payload.newRecord;
+              final userId = newMessage['user_id'] as String;
+              final userData = await _fetchUserData(userId);
+              
+              if (mounted) {
+                setState(() {
+                  _messages.add({
+                    ...newMessage,
+                    'sender_name': userData['name'],
+                    'sender_avatar': userData['avatar_url'],
+                  });
                 });
-              });
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (_messageScrollController.hasClients) {
-                  _messageScrollController.animateTo(
-                    _messageScrollController.position.maxScrollExtent,
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeOut,
-                  );
-                }
-              });
-            } catch (_) {}
+                
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (_messageScrollController.hasClients) {
+                    _messageScrollController.animateTo(
+                      _messageScrollController.position.maxScrollExtent,
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeOut,
+                    );
+                  }
+                });
+              }
+            } catch (e) {
+              debugPrint('Error handling real-time message: $e');
+            }
           },
         )
         .subscribe();
@@ -197,6 +210,7 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
         };
       }
 
+      // Add fallback for any missing users
       for (var userId in userIds) {
         _userData.putIfAbsent(userId, () => {
               'name': 'User ${userId.substring(0, 8)}',
@@ -204,7 +218,9 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
               'id': userId,
             });
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Error fetching user batch: $e');
+    }
   }
 
   Future<Map<String, dynamic>> _fetchUserData(String userId) async {
@@ -216,6 +232,7 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
           .select('username, avatar_url')
           .eq('id', userId)
           .maybeSingle();
+          
       if (profile != null) {
         final data = {
           'name': profile['username'] ?? 'Unknown User',
@@ -225,8 +242,16 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
         _userData[userId] = data;
         return data;
       }
-    } catch (_) {}
-    final fallback = {'name': 'User ${userId.substring(0, 8)}', 'avatar_url': '', 'id': userId};
+    } catch (e) {
+      debugPrint('Error fetching user data: $e');
+    }
+    
+    // Fallback data
+    final fallback = {
+      'name': 'User ${userId.substring(0, 8)}', 
+      'avatar_url': '', 
+      'id': userId
+    };
     _userData[userId] = fallback;
     return fallback;
   }
@@ -238,6 +263,7 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return;
 
+    // Clear input immediately for better UX
     setState(() {
       _messageController.clear();
     });
@@ -247,53 +273,80 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
         'room_id': widget.roomId,
         'user_id': userId,
         'content': content,
+        'created_at': DateTime.now().toUtc().toIso8601String(),
       });
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Send failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to send message: $e'),
+          backgroundColor: Colors.red,
+        )
+      );
     }
   }
 
+  // FIXED: Improved mentor invitation with proper navigation
   Future<void> _inviteMentor() async {
     setState(() => _isLoadingInvite = true);
+    
     try {
       final currentUser = supabase.auth.currentUser;
-      if (currentUser == null) return;
+      if (currentUser == null) {
+        _showError('You must be logged in to invite a mentor');
+        return;
+      }
 
+      // Navigate to CreateLiveLobby and wait for result
       final result = await Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => CreateLiveLobby(
             menteeId: currentUser.id,
-            menteeName: currentUser.email ?? 'Mentee', isMentor: false,
+            menteeName: currentUser.userMetadata?['username'] ?? 
+                       currentUser.email?.split('@').first ?? 
+                       'Mentee', 
+            isMentor: false,
           ),
         ),
       );
 
+      // Handle the result from CreateLiveLobby
       if (result != null && result is Map<String, dynamic>) {
-        final String roomId = result['room_id'].toString();
-        final String roomName = result['room_name'].toString();
-        final String menteeId = result['mentee_id'].toString();
-        final String mentorId = result['mentor_id'].toString();
-        final bool isMentor = false;
+        final String roomId = result['roomId']?.toString() ?? '';
+        final String roomName = result['roomName']?.toString() ?? 'Live Session';
+        final String menteeId = result['menteeId']?.toString() ?? currentUser.id;
+        final String mentorId = result['mentorId']?.toString() ?? '';
 
-        Navigator.pushReplacement(
-          // ignore: use_build_context_synchronously
-          context,
-          MaterialPageRoute(
-            builder: (_) => CollabRoomTabs(
-              roomId: roomId,
-              roomName: roomName,
-              menteeId: menteeId,
-              mentorId: mentorId,
-              isMentor: isMentor,
-            ),
-          ),
-        );
+        // Validate the roomId before navigation
+        if (roomId.isNotEmpty) {
+          // Navigate to the new collaboration room with tabs
+          // FIXED: Use context from callback instead of async gap
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (_) => CollabRoomTabs(
+                  roomId: roomId,
+                  roomName: roomName,
+                  menteeId: menteeId,
+                  mentorId: mentorId,
+                  isMentor: false, sessionId: '',
+                ),
+              ),
+            );
+          });
+        } else {
+          _showError('Failed to create collaboration room');
+        }
+      } else {
+        // User cancelled or no result returned
+        debugPrint('Mentor invitation cancelled or failed');
       }
 
-      await _loadMembers();
-    } catch (e) {
+    } catch (e, stack) {
+      debugPrint('Error inviting mentor: $e');
+      debugPrint('Stack trace: $stack');
       _showError('Failed to invite mentor: $e');
     } finally {
       if (mounted) setState(() => _isLoadingInvite = false);
@@ -303,7 +356,11 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
   void _showError(String message) {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message), backgroundColor: Colors.red),
+        SnackBar(
+          content: Text(message), 
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
       );
     }
   }
@@ -320,20 +377,37 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
   Widget _buildAvatar(Map<String, dynamic> userData, {double radius = 20}) {
     final name = userData['name'] ?? 'User';
     final avatarUrl = userData['avatar_url'] as String?;
+    
     if (avatarUrl != null && avatarUrl.isNotEmpty) {
-      return CircleAvatar(radius: radius, backgroundImage: NetworkImage(avatarUrl));
+      return CircleAvatar(
+        radius: radius, 
+        backgroundImage: NetworkImage(avatarUrl),
+        onBackgroundImageError: (exception, stackTrace) {
+          debugPrint('Failed to load avatar: $exception');
+        },
+      );
     }
+    
     return CircleAvatar(
       radius: radius,
       backgroundColor: Colors.primaries[name.codeUnitAt(0) % Colors.primaries.length],
-      child: Text(name[0].toUpperCase(), style: TextStyle(color: Colors.white, fontSize: radius * 0.6, fontWeight: FontWeight.bold)),
+      child: Text(
+        name[0].toUpperCase(), 
+        style: TextStyle(
+          color: Colors.white, 
+          fontSize: radius * 0.6, 
+          fontWeight: FontWeight.bold
+        ),
+      ),
     );
   }
 
+  // FIXED: Proper disposal of resources
   @override
   void dispose() {
     _messageController.dispose();
     _messageScrollController.dispose();
+    _messageChannel?.unsubscribe(); // FIXED: Unsubscribe channel instead of cancel subscription
     supabase.removeAllChannels();
     super.dispose();
   }
@@ -341,23 +415,51 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
   @override
   Widget build(BuildContext context) {
     final currentUserId = supabase.auth.currentUser?.id;
+    final screenSize = MediaQuery.of(context).size;
+    final isSmallScreen = screenSize.width < 600;
+
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.indigo.shade400,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min, 
-          
           children: [
-            Text(widget.roomName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
+            Text(
+              widget.roomName, 
+              style: TextStyle(
+                fontSize: isSmallScreen ? 14 : 16,
+                fontWeight: FontWeight.bold
+              ), 
+              overflow: TextOverflow.ellipsis
+            ),
             GestureDetector(
-              onTap: () => Clipboard.setData(ClipboardData(text: widget.roomId)),
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: widget.roomId));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Room ID copied to clipboard'))
+                );
+              },
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text("ID: ${widget.roomId}", style: const TextStyle(fontSize: 12, color: Colors.white70)),
+                  Expanded(
+                    child: Text(
+                      "ID: ${widget.roomId}", 
+                      style: TextStyle(
+                        fontSize: isSmallScreen ? 10 : 12,
+                        color: Colors.white70
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
+                  ),
                   const SizedBox(width: 4),
-                  const Icon(Icons.copy, size: 12, color: Colors.white70),
+                  Icon(
+                    Icons.copy, 
+                    size: isSmallScreen ? 10 : 12,
+                    color: Colors.white70
+                  ),
                 ],
               ),
             ),
@@ -366,15 +468,28 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
         actions: [
           if (_isCreator)
             IconButton(
-              icon: const Icon(Icons.delete),
+              icon: Icon(
+                Icons.delete,
+                size: isSmallScreen ? 20 : 24,
+              ),
               onPressed: () => _deleteRoom(),
               tooltip: 'Delete Room',
             ),
           IconButton(
             icon: _isLoadingInvite
-                ? const CircularProgressIndicator(color: Colors.white, strokeWidth: 2)
-                : const Icon(Icons.person_add),
-            tooltip: 'Invite Mentor / Code Lobby',
+                ? SizedBox(
+                    width: isSmallScreen ? 16 : 20,
+                    height: isSmallScreen ? 16 : 20,
+                    child: CircularProgressIndicator(
+                      color: Colors.white, 
+                      strokeWidth: 2
+                    ),
+                  )
+                : Icon(
+                    Icons.person_add,
+                    size: isSmallScreen ? 20 : 24,
+                  ),
+            tooltip: 'Invite Mentor / Create Code Lobby',
             onPressed: _isLoadingInvite ? null : _inviteMentor,
           ),
         ],
@@ -383,11 +498,14 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
+                // Members header section
                 Container(
-                  height: 70,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  height: isSmallScreen ? 60 : 70,
+                  padding: EdgeInsets.symmetric(
+                    horizontal: isSmallScreen ? 6 : 8,
+                    vertical: isSmallScreen ? 3 : 4,
+                  ),
                   decoration: BoxDecoration(
-                    color: Colors.indigo, 
                     gradient: LinearGradient(
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
@@ -402,27 +520,42 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
                     itemCount: _members.length,
                     itemBuilder: (context, index) {
                       final member = _members[index];
-                      final userData = _userData[member['user_id']] ?? {'name': 'User', 'avatar_url': ''};
+                      final userData = _userData[member['user_id']] ?? {
+                        'name': 'User', 
+                        'avatar_url': ''
+                      };
                       final isCreator = member['user_id'] == _creatorId;
+                      
                       return Container(
-                        margin: const EdgeInsets.only(right: 8),
+                        margin: EdgeInsets.only(right: isSmallScreen ? 6 : 8),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Stack(
                               children: [
-                                _buildAvatar(userData, radius: 20),
+                                _buildAvatar(
+                                  userData, 
+                                  radius: isSmallScreen ? 16 : 20
+                                ),
                                 if (isCreator)
-                                  const Positioned(right: 0, bottom: 0, child: Icon(Icons.star, size: 10, color: Colors.amber)),
+                                  Positioned(
+                                    right: 0, 
+                                    bottom: 0, 
+                                    child: Icon(
+                                      Icons.star, 
+                                      size: isSmallScreen ? 8 : 10,
+                                      color: Colors.amber
+                                    ),
+                                  ),
                               ],
                             ),
                             const SizedBox(height: 2),
                             SizedBox(
-                              width: 44,
+                              width: isSmallScreen ? 40 : 44,
                               child: Text(
                                 userData['name'], 
-                                style: const TextStyle(
-                                  fontSize: 9, 
+                                style: TextStyle(
+                                  fontSize: isSmallScreen ? 8 : 9,
                                   color: Colors.white,
                                   fontWeight: FontWeight.w500
                                 ), 
@@ -437,42 +570,111 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
                   ),
                 ),
                 const Divider(height: 1),
+                
+                // Messages section
                 Expanded(
                   child: _isLoadingMessages
                       ? const Center(child: CircularProgressIndicator())
                       : _messages.isEmpty
-                          ? const Center(child: Text('No messages yet'))
+                          ? const Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.chat, size: 64, color: Colors.grey),
+                                  SizedBox(height: 8),
+                                  Text(
+                                    'No messages yet',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                  Text(
+                                    'Start the conversation!',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
                           : ListView.builder(
                               controller: _messageScrollController,
                               itemCount: _messages.length,
                               itemBuilder: (context, index) {
                                 final msg = _messages[index];
                                 final isMe = msg['user_id'] == currentUserId;
-                                final userData = {'name': msg['sender_name'], 'avatar_url': msg['sender_avatar'], 'id': msg['user_id']};
-                                return Align(
-                                  alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-                                  child: Container(
-                                    margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color: isMe ? Colors.indigo[100] : Colors.grey[200],
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        if (!isMe) Text(userData['name'] ?? 'Unknown User', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey[700])),
-                                        if (!isMe) const SizedBox(height: 4),
-                                        Text((msg['content'] ?? '').toString(), style: const TextStyle(fontSize: 16)),
-                                        const SizedBox(height: 4),
-                                        Text(_formatDate((msg['created_at'] ?? '').toString()), style: TextStyle(fontSize: 10, color: Colors.grey[600])),
-                                      ],
-                                    ),
+                                final userData = {
+                                  'name': msg['sender_name'], 
+                                  'avatar_url': msg['sender_avatar'], 
+                                  'id': msg['user_id']
+                                };
+                                
+                                return Container(
+                                  margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                                  child: Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+                                    children: [
+                                      if (!isMe) 
+                                        Padding(
+                                          padding: const EdgeInsets.only(right: 8, top: 4),
+                                          child: _buildAvatar(userData, radius: 16),
+                                        ),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                          children: [
+                                            if (!isMe)
+                                              Text(
+                                                userData['name'] ?? 'Unknown User', 
+                                                style: TextStyle(
+                                                  fontSize: 12, 
+                                                  fontWeight: FontWeight.bold, 
+                                                  color: Colors.grey[700]
+                                                )
+                                              ),
+                                            Container(
+                                              padding: const EdgeInsets.all(12),
+                                              decoration: BoxDecoration(
+                                                color: isMe ? Colors.indigo.shade100 : Colors.grey.shade200,
+                                                borderRadius: BorderRadius.circular(12),
+                                              ),
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    (msg['content'] ?? '').toString(), 
+                                                    style: const TextStyle(fontSize: 16)
+                                                  ),
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    _formatDate((msg['created_at'] ?? '').toString()), 
+                                                    style: TextStyle(
+                                                      fontSize: 10, 
+                                                      color: Colors.grey[600]
+                                                    )
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      if (isMe) 
+                                        Padding(
+                                          padding: const EdgeInsets.only(left: 8, top: 4),
+                                          child: _buildAvatar(userData, radius: 16),
+                                        ),
+                                    ],
                                   ),
                                 );
                               },
                             ),
                 ),
+                
+                // Message input section
                 SafeArea(
                   child: Padding(
                     padding: const EdgeInsets.all(8),
@@ -483,14 +685,22 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
                             controller: _messageController,
                             decoration: InputDecoration(
                               hintText: "Type a message...",
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(20)),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12, 
+                                vertical: 12
+                              ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(20)
+                              ),
                             ),
                             onSubmitted: (_) => _sendMessage(),
                           ),
                         ),
                         const SizedBox(width: 8),
-                        IconButton(icon: const Icon(Icons.send, color: Colors.indigo), onPressed: _sendMessage),
+                        IconButton(
+                          icon: const Icon(Icons.send, color: Colors.indigo), 
+                          onPressed: _sendMessage
+                        ),
                       ],
                     ),
                   ),
@@ -504,10 +714,13 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Delete room?'),
-        content: const Text('Are you sure? This cannot be undone.'),
+        title: const Text('Delete Room?'),
+        content: const Text('Are you sure you want to delete this room? This action cannot be undone.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false), 
+            child: const Text('Cancel')
+          ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             style: TextButton.styleFrom(foregroundColor: Colors.red),
@@ -520,18 +733,26 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
     if (confirm != true) return;
 
     try {
-  
+      // Delete related data first (foreign key constraints)
       await supabase.from('live_sessions').delete().eq('room_id', widget.roomId);
       await supabase.from('room_members').delete().eq('room_id', widget.roomId);
       await supabase.from('room_messages').delete().eq('room_id', widget.roomId);
 
+      // Finally delete the room
       await supabase.from('rooms').delete().eq('id', widget.roomId);
+      
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Room deleted')));
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Room deleted successfully'))
+      );
+      
       Navigator.of(context).maybePop();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete room: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to delete room: $e'))
+      );
     }
   }
 }

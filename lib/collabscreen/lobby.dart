@@ -57,34 +57,31 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
         'user_id': user.id,
       });
 
-      if (!mounted) return;
-
-      // Check if there's a live session
+      // ✅ CREATE LIVE SESSION FOR THE ROOM
       final session = await supabase
           .from('live_sessions')
+          .insert({
+            'room_id': room['id'],
+            'mentee_id': user.id, // Creator becomes mentee by default
+            'code': '// Welcome to the collaboration room!\n// Start coding together...',
+            'is_live': false,
+            'language': 'python',
+          })
           .select()
-          .eq('room_id', room['id'])
-          .maybeSingle();
+          .single();
 
-      String mentorId = '';
-      String menteeId = '';
-
-      if (session != null) {
-        mentorId = session['mentor_id'] ?? '';
-        menteeId = session['mentee_id'] ?? '';
-      }
-      
       if (!mounted) return;
-      
+
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => CollabRoomTabs(
             roomId: room['id'].toString(),
             roomName: room['name'].toString(),
-            isMentor: user.id == mentorId,
-            mentorId: mentorId,
-            menteeId: menteeId,
+            isMentor: false, // Creator is mentee by default
+            mentorId: '', // No mentor initially
+            menteeId: user.id,
+            sessionId: session['id'].toString(), // ✅ ADDED: Critical parameter
           ),
         ),
       );
@@ -217,29 +214,52 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
           .from('room_members')
           .select()
           .eq('room_id', roomId)
-          .eq('user_id', user.id);
+          .eq('user_id', user.id)
+          .maybeSingle();
 
-      if (existing.isEmpty) {
+      if (existing == null) {
         await supabase.from('room_members').insert({
           'room_id': roomId,
           'user_id': user.id,
         });
       }
 
-      // Fetch live session
+      // ✅ GET OR CREATE LIVE SESSION
       final session = await supabase
           .from('live_sessions')
           .select()
           .eq('room_id', roomId)
           .maybeSingle();
 
+      String sessionId;
       String mentorId = '';
       String menteeId = '';
 
       if (session != null) {
-        mentorId = session['mentor_id'] ?? '';
-        menteeId = session['mentee_id'] ?? '';
+        // Use existing session
+        sessionId = session['id'].toString();
+        mentorId = session['mentor_id']?.toString() ?? '';
+        menteeId = session['mentee_id']?.toString() ?? '';
+      } else {
+        // Create new session if none exists
+        final newSession = await supabase
+            .from('live_sessions')
+            .insert({
+              'room_id': roomId,
+              'mentee_id': room['creator_id'], // Room creator is mentee
+              'code': '// Welcome to the collaboration room!\n// Start coding together...',
+              'is_live': false,
+              'language': 'python',
+            })
+            .select()
+            .single();
+        
+        sessionId = newSession['id'].toString();
+        menteeId = newSession['mentee_id']?.toString() ?? '';
       }
+
+      // ✅ DETERMINE USER ROLE
+      final bool isMentor = user.id == mentorId;
 
       if (!mounted) return;
       Navigator.push(
@@ -247,10 +267,101 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
         MaterialPageRoute(
           builder: (_) => CollabRoomTabs(
             roomId: roomId,
-            roomName: room['name'],
-            isMentor: user.id == mentorId,
+            roomName: room['name'].toString(),
+            isMentor: isMentor,
             mentorId: mentorId,
             menteeId: menteeId,
+            sessionId: sessionId, // ✅ ADDED: Critical parameter
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error joining room: ${e.toString()}'),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.all(isSmallScreen ? 8 : 16),
+        ),
+      );
+    }
+  }
+
+  // Join room from list (updated)
+  Future<void> _joinRoomFromList(String roomId) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    try {
+      // Check if room exists
+      final room = await supabase
+          .from('rooms')
+          .select()
+          .eq('id', roomId)
+          .maybeSingle();
+
+      if (room == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text("Room not found"),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.all(isSmallScreen ? 8 : 16),
+          ),
+        );
+        return;
+      }
+
+      // Add user if not already a member
+      final existing = await supabase
+          .from('room_members')
+          .select()
+          .eq('room_id', roomId)
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+      if (existing == null) {
+        await supabase.from('room_members').insert({
+          'room_id': roomId,
+          'user_id': user.id,
+        });
+      }
+
+      // ✅ GET LIVE SESSION
+      final session = await supabase
+          .from('live_sessions')
+          .select()
+          .eq('room_id', roomId)
+          .maybeSingle();
+
+      if (session == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text("Error: No live session found for this room"),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.all(isSmallScreen ? 8 : 16),
+          ),
+        );
+        return;
+      }
+
+      final sessionId = session['id'].toString();
+      final mentorId = session['mentor_id']?.toString() ?? '';
+      final menteeId = session['mentee_id']?.toString() ?? '';
+      final bool isMentor = user.id == mentorId;
+
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CollabRoomTabs(
+            roomId: roomId,
+            roomName: room['name'].toString(),
+            isMentor: isMentor,
+            mentorId: mentorId,
+            menteeId: menteeId,
+            sessionId: sessionId, // ✅ ADDED: Critical parameter
           ),
         ),
       );
@@ -433,7 +544,7 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
               color: Colors.indigo,
             ),
             title: Text(
-              room['name'],
+              room['name'].toString(),
               style: TextStyle(
                 fontSize: isSmallScreen ? 16 : 18,
                 fontWeight: FontWeight.w500,
@@ -451,7 +562,7 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
                 Icons.arrow_forward,
                 size: isSmallScreen ? 20 : 24,
               ),
-              onPressed: () => _joinRoom(room['id']),
+              onPressed: () => _joinRoomFromList(room['id'].toString()), // ✅ UPDATED
               tooltip: "Join Room",
             ),
             contentPadding: EdgeInsets.symmetric(

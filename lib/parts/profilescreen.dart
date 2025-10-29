@@ -1,10 +1,10 @@
-import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:codexhub01/parts/log_in.dart';
+import 'package:codexhub01/services/notif.dart';
 
 class ProfileScreen extends StatefulWidget {
   final ValueNotifier<ThemeMode>? themeNotifier;
@@ -15,8 +15,7 @@ class ProfileScreen extends StatefulWidget {
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
-class _ProfileScreenState extends State<ProfileScreen>
-    with WidgetsBindingObserver {
+class _ProfileScreenState extends State<ProfileScreen> {
   bool isDarkMode = false;
   bool notificationsEnabled = false;
   String? profileImageUrl;
@@ -25,27 +24,76 @@ class _ProfileScreenState extends State<ProfileScreen>
   SharedPreferences? _prefs;
 
   final supabase = Supabase.instance.client;
-  final ImagePicker _picker = ImagePicker();
-
-  Future<void> pickImage() async {
-    final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
-    if (pickedFile != null) {
-      // do something with pickedFile
-    }
-  }
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _initializePreferences();
     _loadUserProfile();
+    _checkFirstTimeNotification();
   }
 
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
+  Future<void> _checkFirstTimeNotification() async {
+    _prefs ??= await SharedPreferences.getInstance();
+    final hasSeenPrompt = _prefs?.getBool('hasSeenNotificationPrompt') ?? false;
+    
+    if (!hasSeenPrompt && mounted) {
+      // First time - show permission explanation
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _showNotificationExplanationDialog();
+      });
+    }
+  }
+
+  void _showNotificationExplanationDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Enable Notifications"),
+        content: const Text(
+          "Get notified about:\n"
+          "• New messages and calls\n"
+          "• Session requests and updates\n" 
+          "• Live coding invitations\n"
+          "• Friend requests\n"
+          "• Important announcements\n\n"
+          "You can always change this in settings.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              // User declined - save that they've seen the prompt
+              _prefs?.setBool('hasSeenNotificationPrompt', true);
+              _prefs?.setBool('notificationsEnabled', false);
+              Navigator.pop(context);
+            },
+            child: const Text("Not Now"),
+          ),
+          TextButton(
+            onPressed: () {
+              // User accepted - enable notifications
+              _prefs?.setBool('hasSeenNotificationPrompt', true);
+              _prefs?.setBool('notificationsEnabled', true);
+              setState(() {
+                notificationsEnabled = true;
+              });
+              
+              // Show welcome notification
+              NotificationService.showNotification(
+                title: "Notifications Enabled!",
+                body: "You'll now receive alerts for important updates.",
+              );
+              
+              // Update database
+              _updateNotificationPreference(true);
+              
+              Navigator.pop(context);
+            },
+            child: const Text("Enable"),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _initializePreferences() async {
@@ -61,6 +109,11 @@ class _ProfileScreenState extends State<ProfileScreen>
       isDarkMode = _prefs?.getBool('isDarkMode') ?? false;
       notificationsEnabled = _prefs?.getBool('notificationsEnabled') ?? true;
     });
+    
+    // Sync with global theme notifier
+    if (widget.themeNotifier != null) {
+      widget.themeNotifier!.value = isDarkMode ? ThemeMode.dark : ThemeMode.light;
+    }
   }
 
   Future<void> _loadUserProfile() async {
@@ -72,91 +125,193 @@ class _ProfileScreenState extends State<ProfileScreen>
     try {
       final response = await supabase
           .from('profiles_new')
-          .select('username, avatar_url')
+          .select('username, avatar_url, is_dark_mode, role')
           .eq('id', user.id)
           .maybeSingle();
 
       if (!mounted) return;
 
-      String? avatar;
       if (response != null) {
-        avatar = response['avatar_url'] as String?;
+        String? avatar = response['avatar_url'] as String?;
         if (avatar != null && avatar.isNotEmpty) {
           avatar = "$avatar?t=${DateTime.now().millisecondsSinceEpoch}";
         }
+        
+        // Load user's dark mode preference from profile
+        bool userDarkMode = response['is_dark_mode'] as bool? ?? false;
 
         setState(() {
           userName = response['username'] ?? "User";
           email = userEmail;
           profileImageUrl = avatar;
+          isDarkMode = userDarkMode;
         });
-      } else {
-        await _createBasicProfile(user, userEmail);
+
+        // Update local preferences and global theme
+        await _updateThemePreferences(userDarkMode);
       }
     } catch (e) {
       debugPrint("Error loading user profile: $e");
-      if (e.toString().contains('avatar_url')) {
-        await _createBasicProfile(user, userEmail);
-      }
-    }
-  }
-
-  Future<void> _createBasicProfile(User user, String userEmail) async {
-    try {
-      await supabase.from('profiles_new').insert({
-        'id': user.id,
-        'username': user.email?.split('@').first ?? 'User',
-        'email': userEmail,
-        'role': 'user',
-        'created_at': DateTime.now().toIso8601String(),
-      });
-
-      if (mounted) {
-        setState(() {
-          userName = user.email?.split('@').first ?? 'User';
-          email = userEmail;
-        });
-      }
-    } catch (e) {
-      debugPrint("Error creating basic profile: $e");
+      // If we can't load from database, use local preferences
+      _loadPreferences();
     }
   }
 
   Future<void> _toggleDarkMode(bool value) async {
+    if (!mounted) return;
+    
+    setState(() => isDarkMode = value);
+    await _updateThemePreferences(value);
+  }
+
+  Future<void> _updateThemePreferences(bool value) async {
     _prefs ??= await SharedPreferences.getInstance();
     await _prefs?.setBool('isDarkMode', value);
 
-    if (!mounted) return;
-    setState(() => isDarkMode = value);
-
+    // Update global theme notifier
     widget.themeNotifier?.value = value ? ThemeMode.dark : ThemeMode.light;
+
+    // Update in database if user is logged in
+    final user = supabase.auth.currentUser;
+    if (user != null) {
+      try {
+        await supabase
+            .from('profiles_new')
+            .update({'is_dark_mode': value})
+            .eq('id', user.id);
+        debugPrint("✅ Dark mode preference updated: $value");
+      } catch (e) {
+        debugPrint("❌ Error updating dark mode: $e");
+        // Don't show error - local preference is saved
+      }
+    }
   }
 
   Future<void> _toggleNotifications(bool value) async {
-    _prefs ??= await SharedPreferences.getInstance();
-    await _prefs?.setBool('notificationsEnabled', value);
-
     if (!mounted) return;
+    
     setState(() => notificationsEnabled = value);
+    
+    try {
+      _prefs ??= await SharedPreferences.getInstance();
+      await _prefs?.setBool('notificationsEnabled', value);
+      await _prefs?.setBool('hasSeenNotificationPrompt', true);
+
+      // Update in database
+      await _updateNotificationPreference(value);
+
+      // Show/hide notifications based on preference
+      if (value) {
+        await _scheduleExampleNotifications();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Notifications enabled - you'll receive alerts for important updates"),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      } else {
+        await _cancelAllScheduledNotifications();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Notifications disabled - you won't receive any alerts"),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+
+    } catch (e) {
+      debugPrint("Error updating notifications: $e");
+      // Revert on error
+      if (mounted) {
+        setState(() => notificationsEnabled = !value);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to update notifications: $e")),
+        );
+      }
+    }
   }
 
-  void _confirmLogout(BuildContext context) {
-    if (!mounted) return;
+  Future<void> _updateNotificationPreference(bool value) async {
+    final user = supabase.auth.currentUser;
+    if (user != null) {
+      try {
+        await supabase
+            .from('profiles_new')
+            .update({'notifications_enabled': value})
+            .eq('id', user.id);
+        debugPrint("✅ Notification preference updated: $value");
+      } catch (e) {
+        debugPrint("❌ Error updating notification preference: $e");
+        // Don't show error to user - local preference is saved
+      }
+    }
+  }
 
+  Future<void> _scheduleExampleNotifications() async {
+    if (await NotificationService.areNotificationsEnabled()) {
+      // Show immediate welcome notification
+      await NotificationService.showNotification(
+        title: "Notifications Activated! 🎉",
+        body: "You'll now receive alerts for messages, sessions, calls, and more.",
+      );
+      
+      // Optionally schedule daily reminder if needed
+      // await _scheduleDailyReminder();
+    }
+  }
+
+  Future<void> _cancelAllScheduledNotifications() async {
+    await NotificationService.cancelAll();
+  }
+
+  // Optional: Method to schedule daily reminder (commented out since it's not used)
+  /*
+  Future<void> _scheduleDailyReminder() async {
+    final FlutterLocalNotificationsPlugin notifications = FlutterLocalNotificationsPlugin();
+    
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+        AndroidNotificationDetails(
+      'daily_reminder',
+      'Daily Reminder',
+      channelDescription: 'Daily reminder notifications',
+      importance: Importance.max,
+      priority: Priority.high,
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+    );
+    
+    const NotificationDetails platformChannelSpecifics =
+        NotificationDetails(android: androidPlatformChannelSpecifics);
+    
+    // Schedule for daily
+    await notifications.periodicallyShow(
+      0,
+      'Daily Coding Reminder',
+      'Don\'t forget to practice and check your sessions today!',
+      RepeatInterval.daily,
+      platformChannelSpecifics,
+    );
+  }
+  */
+
+  void _confirmLogout(BuildContext context) {
     showDialog(
       context: context,
-      builder: (BuildContext dialogContext) {
+      builder: (BuildContext context) {
         return AlertDialog(
           title: const Text("Confirm Logout"),
           content: const Text("Are you sure you want to log out?"),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
+              onPressed: () => Navigator.pop(context),
               child: const Text("No"),
             ),
             TextButton(
               onPressed: () {
-                Navigator.pop(dialogContext);
+                Navigator.pop(context);
                 _logout();
               },
               child: const Text("Yes"),
@@ -179,33 +334,13 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
   }
 
-  // Safe snackbar method
-  void _safeShowSnackBar(String message, {bool isError = false}) {
-    if (mounted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(message),
-              backgroundColor: isError ? Colors.red : Colors.green,
-              duration: const Duration(seconds: 3),
-            ),
-          );
-        }
-      });
-    }
-  }
-
   void _editProfile() {
-    if (!mounted) return;
-
     showDialog(
       context: context,
       builder: (context) => EditProfileDialog(
         currentUsername: userName,
         currentAvatarUrl: profileImageUrl,
         onSave: _handleProfileUpdate,
-        currentRole: '',
       ),
     );
   }
@@ -223,13 +358,9 @@ class _ProfileScreenState extends State<ProfileScreen>
       // Handle avatar upload if a new image was selected
       if (newAvatar != null) {
         try {
-          debugPrint("🖼️ Starting avatar upload...");
-
           final bytes = await newAvatar.readAsBytes();
           final fileExt = newAvatar.path.split('.').last.toLowerCase();
           final fileName = '${user.id}.${fileExt == 'jpg' ? 'jpeg' : fileExt}';
-
-          debugPrint("📁 Uploading file: $fileName");
 
           // Upload to Supabase Storage
           await supabase.storage
@@ -240,61 +371,49 @@ class _ProfileScreenState extends State<ProfileScreen>
                 fileOptions: const FileOptions(upsert: true),
               );
 
-          debugPrint("✅ Avatar uploaded successfully");
-
           // Get public URL
           final publicUrl = supabase.storage
               .from('avatars')
               .getPublicUrl(fileName);
 
-          debugPrint("🔗 Avatar URL: $publicUrl");
-
           updateData['avatar_url'] = publicUrl;
         } catch (e) {
           debugPrint("❌ Error uploading avatar: $e");
-          _safeShowSnackBar("Failed to upload image: $e", isError: true);
           // Continue without avatar if upload fails
         }
       }
 
       // Update profile in database
-      debugPrint("💾 Updating profile...");
       await supabase.from('profiles_new').update(updateData).eq('id', user.id);
-
-      debugPrint("✅ Profile updated successfully");
 
       // Reload profile to reflect changes
       await _loadUserProfile();
 
-      _safeShowSnackBar("Profile updated successfully!");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Profile updated successfully!")),
+        );
+      }
     } catch (e) {
       debugPrint("❌ Error updating profile: $e");
-      _safeShowSnackBar(
-        "Error updating profile: ${e.toString()}",
-        isError: true,
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Error updating profile")),
+        );
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final screenSize = MediaQuery.of(context).size;
-    final isSmallScreen = screenSize.width < 600;
-
-
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          'Profile Settings',
-          style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
-        ),
-        backgroundColor: Colors.indigo,
+        title: const Text('Profile Settings'),
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        foregroundColor: Theme.of(context).colorScheme.onPrimary,
         actions: [
           IconButton(
-            icon: Icon(
-              Icons.refresh,
-              size: isSmallScreen ? 20 : 24,
-            ),
+            icon: const Icon(Icons.refresh),
             onPressed: _loadUserProfile,
             tooltip: "Refresh profile",
           ),
@@ -302,17 +421,17 @@ class _ProfileScreenState extends State<ProfileScreen>
       ),
       body: SafeArea(
         child: ListView(
-          padding: EdgeInsets.all(isSmallScreen ? 16 : 24),
+          padding: const EdgeInsets.all(16),
           children: [
             // Profile Header Card
             Card(
               child: Padding(
-                padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+                padding: const EdgeInsets.all(16),
                 child: Row(
                   children: [
                     GestureDetector(
                       onTap: () {
-                        if (profileImageUrl != null && mounted) {
+                        if (profileImageUrl != null) {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -326,52 +445,37 @@ class _ProfileScreenState extends State<ProfileScreen>
                       child: Hero(
                         tag: "profilePicHero",
                         child: CircleAvatar(
-                          radius: isSmallScreen ? 30 : 40,
+                          radius: 40,
                           backgroundColor: Colors.grey[300],
                           backgroundImage: profileImageUrl != null
                               ? NetworkImage(profileImageUrl!)
                               : null,
                           child: profileImageUrl == null
-                              ? Icon(
-                                  Icons.account_circle,
-                                  size: isSmallScreen ? 50 : 70,
-                                  color: Colors.grey,
-                                )
+                              ? const Icon(Icons.account_circle, size: 70, color: Colors.grey)
                               : null,
                         ),
                       ),
                     ),
-                    SizedBox(width: isSmallScreen ? 12 : 16),
+                    const SizedBox(width: 16),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
                             userName,
-                            style: TextStyle(
-                              fontSize: isSmallScreen ? 18 : 24,
+                            style: const TextStyle(
+                              fontSize: 24,
                               fontWeight: FontWeight.bold,
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
                           ),
-                          SizedBox(height: isSmallScreen ? 2 : 4),
+                          const SizedBox(height: 4),
                           Text(
                             email,
                             style: TextStyle(
-                              fontSize: isSmallScreen ? 14 : 16,
                               color: Colors.grey[600],
                             ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
                           ),
-                          SizedBox(height: isSmallScreen ? 2 : 4),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                          ),
+                          const SizedBox(height: 4),
                         ],
                       ),
                     ),
@@ -380,21 +484,15 @@ class _ProfileScreenState extends State<ProfileScreen>
               ),
             ),
 
-            SizedBox(height: isSmallScreen ? 16 : 24),
+            const SizedBox(height: 24),
 
             // Settings Card
             Card(
               child: Column(
                 children: [
                   ListTile(
-                    leading: Icon(
-                      Icons.dark_mode,
-                      size: isSmallScreen ? 20 : 24,
-                    ),
-                    title: Text(
-                      "Dark Mode",
-                      style: TextStyle(fontSize: isSmallScreen ? 16 : 18),
-                    ),
+                    leading: const Icon(Icons.dark_mode),
+                    title: const Text("Dark Mode"),
                     trailing: Switch(
                       value: isDarkMode,
                       onChanged: _toggleDarkMode,
@@ -402,14 +500,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                   ),
                   const Divider(height: 1),
                   ListTile(
-                    leading: Icon(
-                      Icons.notifications,
-                      size: isSmallScreen ? 20 : 24,
-                    ),
-                    title: Text(
-                      "Notifications",
-                      style: TextStyle(fontSize: isSmallScreen ? 16 : 18),
-                    ),
+                    leading: const Icon(Icons.notifications),
+                    title: const Text("Notifications"),
                     trailing: Switch(
                       value: notificationsEnabled,
                       onChanged: _toggleNotifications,
@@ -417,50 +509,28 @@ class _ProfileScreenState extends State<ProfileScreen>
                   ),
                   const Divider(height: 1),
                   ListTile(
-                    leading: Icon(
-                      Icons.edit,
-                      size: isSmallScreen ? 20 : 24,
-                    ),
-                    title: Text(
-                      "Edit Profile",
-                      style: TextStyle(fontSize: isSmallScreen ? 16 : 18),
-                    ),
-                    trailing: Icon(
-                      Icons.arrow_forward_ios,
-                      size: isSmallScreen ? 16 : 18,
-                    ),
+                    leading: const Icon(Icons.edit),
+                    title: const Text("Edit Profile"),
+                    trailing: const Icon(Icons.arrow_forward_ios),
                     onTap: _editProfile,
                   ),
                 ],
               ),
             ),
 
-            SizedBox(height: isSmallScreen ? 16 : 24),
+            const SizedBox(height: 24),
 
             // Logout Button
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: () {
-                  if (mounted) _confirmLogout(context);
-                },
-                icon: Icon(
-                  Icons.logout,
-                  size: isSmallScreen ? 18 : 20,
-                ),
-                label: Text(
-                  "Log Out",
-                  style: TextStyle(fontSize: isSmallScreen ? 16 : 18),
-                ),
+                onPressed: () => _confirmLogout(context),
+                icon: const Icon(Icons.logout),
+                label: const Text("Log Out"),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.red[50],
                   foregroundColor: Colors.red,
-                  padding: EdgeInsets.symmetric(
-                    vertical: isSmallScreen ? 14 : 16,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
               ),
             ),
@@ -471,18 +541,17 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 }
 
-// Separate dialog widget
+// ... (EditProfileDialog and FullScreenProfilePic classes remain the same)
+
+// Simplified EditProfileDialog (remove offline references)
 class EditProfileDialog extends StatefulWidget {
   final String currentUsername;
-  final String currentRole;
   final String? currentAvatarUrl;
-  final Function({required String newUsername, required XFile? newAvatar})
-      onSave;
+  final Function({required String newUsername, required XFile? newAvatar}) onSave;
 
   const EditProfileDialog({
     super.key,
     required this.currentUsername,
-    required this.currentRole,
     this.currentAvatarUrl,
     required this.onSave,
   });
@@ -639,14 +708,6 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
             ),
             SizedBox(height: isSmallScreen ? 8 : 10),
 
-            // Role Display
-            Text(
-              "Role: ${widget.currentRole}",
-              style: TextStyle(
-                color: Colors.grey[600],
-                fontSize: isSmallScreen ? 12 : 14,
-              ),
-            ),
           ],
         ),
       ),

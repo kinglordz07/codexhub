@@ -12,10 +12,12 @@ class RoomListScreen extends StatefulWidget {
 class _RoomListScreenState extends State<RoomListScreen> {
   final SupabaseClient supabase = Supabase.instance.client;
   final TextEditingController _roomController = TextEditingController();
+  final TextEditingController _roomIdController = TextEditingController();
   
   List<Map<String, dynamic>> _rooms = [];
   bool _isLoading = true;
   bool _isCreatingRoom = false;
+  bool _isJoiningRoom = false;
 
   // Responsive layout detection
   bool get isSmallScreen {
@@ -82,7 +84,7 @@ class _RoomListScreenState extends State<RoomListScreen> {
           .from('rooms')
           .insert({
             'name': roomName,
-            'created_by': user.id,
+            'creator_id': user.id, // ✅ FIXED: Changed from 'created_by' to 'creator_id'
           })
           .select()
           .single();
@@ -92,6 +94,24 @@ class _RoomListScreenState extends State<RoomListScreen> {
         'room_id': newRoom['id'],
         'user_id': user.id,
       });
+
+      // ✅ CREATE LIVE SESSION AND GET sessionId
+      final session = await supabase
+          .from('live_sessions')
+          .insert({
+            'room_id': newRoom['id'],
+            'mentee_id': user.id, // Creator becomes mentee
+            'mentor_id': null, // No mentor initially
+            'code': '// Welcome to collaboration room!\n// Start coding...',
+            'is_live': false,
+            'language': 'python',
+          })
+          .select()
+          .single();
+
+      final sessionId = session['id'].toString();
+      final mentorId = session['mentor_id']?.toString() ?? '';
+      final menteeId = session['mentee_id']?.toString() ?? '';
 
       _roomController.clear();
       await _loadRooms();
@@ -104,12 +124,131 @@ class _RoomListScreenState extends State<RoomListScreen> {
             margin: EdgeInsets.all(isSmallScreen ? 8 : 16),
           ),
         );
+
+        // ✅ NAVIGATE WITH sessionId
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CollabRoomTabs(
+              roomId: newRoom['id'].toString(),
+              roomName: newRoom['name'].toString(),
+              menteeId: menteeId,
+              mentorId: mentorId,
+              isMentor: user.id == mentorId,
+              sessionId: sessionId, // ✅ ADDED
+            ),
+          ),
+        );
       }
     } catch (e) {
       _showError('Failed to create room: $e');
     } finally {
       if (mounted) {
         setState(() => _isCreatingRoom = false);
+      }
+    }
+  }
+
+  Future<void> _joinRoomById() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) {
+      _showError('Please sign in to join a room');
+      return;
+    }
+
+    final roomId = _roomIdController.text.trim();
+    if (roomId.isEmpty) {
+      _showError('Please enter a room ID');
+      return;
+    }
+
+    setState(() => _isJoiningRoom = true);
+
+    try {
+      // Check if room exists
+      final room = await supabase
+          .from('rooms')
+          .select()
+          .eq('id', roomId)
+          .maybeSingle();
+
+      if (room == null) {
+        _showError('Room with ID $roomId not found');
+        return;
+      }
+
+      // Check if user is already a member
+      final existingMembership = await supabase
+          .from('room_members')
+          .select()
+          .eq('room_id', room['id'])
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+      // If not a member, add them
+      if (existingMembership == null) {
+        await supabase.from('room_members').insert({
+          'room_id': room['id'],
+          'user_id': user.id,
+        });
+      }
+
+      // ✅ GET OR CREATE LIVE SESSION
+      final session = await supabase
+          .from('live_sessions')
+          .select()
+          .eq('room_id', room['id'])
+          .maybeSingle();
+
+      String sessionId;
+      String mentorId = '';
+      String menteeId = '';
+
+      if (session != null) {
+        // Use existing session
+        sessionId = session['id'].toString();
+        mentorId = session['mentor_id']?.toString() ?? '';
+        menteeId = session['mentee_id']?.toString() ?? '';
+      } else {
+        // Create new session if none exists
+        final newSession = await supabase
+            .from('live_sessions')
+            .insert({
+              'room_id': room['id'],
+              'mentee_id': room['creator_id'], // Room creator is mentee
+              'code': '// Welcome to collaboration room!\n// Start coding...',
+              'is_live': false,
+              'language': 'python',
+            })
+            .select()
+            .single();
+        
+        sessionId = newSession['id'].toString();
+        menteeId = newSession['mentee_id']?.toString() ?? '';
+      }
+
+      _roomIdController.clear();
+
+      if (mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CollabRoomTabs(
+              roomId: room['id'].toString(),
+              roomName: room['name'].toString(),
+              menteeId: menteeId,
+              mentorId: mentorId,
+              isMentor: user.id == mentorId,
+              sessionId: sessionId, // ✅ ADDED
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      _showError('Failed to join room: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isJoiningRoom = false);
       }
     }
   }
@@ -151,20 +290,21 @@ class _RoomListScreenState extends State<RoomListScreen> {
         });
       }
 
-      // Check for live session to determine role
+      // ✅ GET LIVE SESSION
       final session = await supabase
           .from('live_sessions')
           .select()
           .eq('room_id', room['id'])
           .maybeSingle();
 
-      String mentorId = '';
-      String menteeId = '';
-
-      if (session != null) {
-        mentorId = session['mentor_id']?.toString() ?? '';
-        menteeId = session['mentee_id']?.toString() ?? '';
+      if (session == null) {
+        _showError('No live session found for this room');
+        return;
       }
+
+      final sessionId = session['id'].toString();
+      final mentorId = session['mentor_id']?.toString() ?? '';
+      final menteeId = session['mentee_id']?.toString() ?? '';
 
       if (mounted) {
         Navigator.push(
@@ -176,6 +316,7 @@ class _RoomListScreenState extends State<RoomListScreen> {
               menteeId: menteeId,
               mentorId: mentorId,
               isMentor: user.id == mentorId,
+              sessionId: sessionId, // ✅ ADDED
             ),
           ),
         );
@@ -275,51 +416,152 @@ class _RoomListScreenState extends State<RoomListScreen> {
     );
   }
 
-  Widget _buildRoomInput() {
-    return Container(
-      padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        border: Border(
-          top: BorderSide(color: Colors.grey.shade300),
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
+  Widget _buildRoomCreationSection() {
+    return Card(
+      elevation: 4,
+      child: Padding(
+        padding: EdgeInsets.all(isSmallScreen ? 8 : 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.add_circle_outline, 
+                  color: Colors.indigo, 
+                  size: isSmallScreen ? 18 : 24
+                ),
+                SizedBox(width: isSmallScreen ? 6 : 8),
+                Text(
+                  'Create Room',
+                  style: TextStyle(
+                    fontSize: isSmallScreen ? 14 : 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: isSmallScreen ? 8 : 16),
+            TextField(
               controller: _roomController,
               decoration: InputDecoration(
-                labelText: "New Room Name",
+                labelText: "Room Name",
                 hintText: "Enter room name...",
                 border: const OutlineInputBorder(),
                 contentPadding: EdgeInsets.symmetric(
-                  horizontal: isSmallScreen ? 12 : 16,
-                  vertical: isSmallScreen ? 12 : 16,
+                  horizontal: isSmallScreen ? 10 : 16,
+                  vertical: isSmallScreen ? 10 : 16,
                 ),
+                isDense: isSmallScreen,
               ),
               onSubmitted: (_) => _createRoom(),
-              style: TextStyle(fontSize: isSmallScreen ? 16 : 18),
+              style: TextStyle(fontSize: isSmallScreen ? 14 : 18),
             ),
-          ),
-          SizedBox(width: isSmallScreen ? 12 : 16),
-          _isCreatingRoom
-              ? SizedBox(
-                  width: isSmallScreen ? 24 : 28,
-                  height: isSmallScreen ? 24 : 28,
-                  child: const CircularProgressIndicator(strokeWidth: 2),
-                )
-              : IconButton(
-                  icon: Icon(
-                    Icons.add_circle,
-                    size: isSmallScreen ? 32 : 36,
-                    color: Colors.indigo,
-                  ),
-                  onPressed: _createRoom,
-                  tooltip: 'Create Room',
-                ),
-        ],
+            SizedBox(height: isSmallScreen ? 8 : 16),
+            SizedBox(
+              width: double.infinity,
+              child: _isCreatingRoom
+                  ? Center(child: CircularProgressIndicator())
+                  : ElevatedButton(
+                      onPressed: _createRoom,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.indigo,
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(
+                          vertical: isSmallScreen ? 10 : 14,
+                        ),
+                      ),
+                      child: Text(
+                        'Create Room',
+                        style: TextStyle(fontSize: isSmallScreen ? 12 : 16),
+                      ),
+                    ),
+            ),
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _buildJoinByIdSection() {
+    return Card(
+      elevation: 4,
+      child: Padding(
+        padding: EdgeInsets.all(isSmallScreen ? 8 : 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.meeting_room, 
+                  color: Colors.green, 
+                  size: isSmallScreen ? 18 : 24
+                ),
+                SizedBox(width: isSmallScreen ? 6 : 8),
+                Text(
+                  'Join by ID',
+                  style: TextStyle(
+                    fontSize: isSmallScreen ? 14 : 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: isSmallScreen ? 8 : 16),
+            TextField(
+              controller: _roomIdController,
+              decoration: InputDecoration(
+                labelText: "Room ID",
+                hintText: "Enter room ID...",
+                border: const OutlineInputBorder(),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: isSmallScreen ? 10 : 16,
+                  vertical: isSmallScreen ? 10 : 16,
+                ),
+                isDense: isSmallScreen,
+              ),
+              onSubmitted: (_) => _joinRoomById(),
+              style: TextStyle(fontSize: isSmallScreen ? 14 : 18),
+            ),
+            SizedBox(height: isSmallScreen ? 8 : 16),
+            SizedBox(
+              width: double.infinity,
+              child: _isJoiningRoom
+                  ? Center(child: CircularProgressIndicator())
+                  : ElevatedButton(
+                      onPressed: _joinRoomById,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(
+                          vertical: isSmallScreen ? 10 : 14,
+                        ),
+                      ),
+                      child: Text(
+                        'Join Room',
+                        style: TextStyle(fontSize: isSmallScreen ? 12 : 16),
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActionSections() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: _buildRoomCreationSection(),
+        ),
+        SizedBox(width: isSmallScreen ? 8 : 16),
+        Expanded(
+          child: _buildJoinByIdSection(),
+        ),
+      ],
     );
   }
 
@@ -349,10 +591,47 @@ class _RoomListScreenState extends State<RoomListScreen> {
       ),
       body: Column(
         children: [
+          // Action sections (Create Room + Join by ID)
+          Padding(
+            padding: EdgeInsets.all(isSmallScreen ? 8 : 16),
+            child: _buildActionSections(),
+          ),
+          
+          // Room list header
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: isSmallScreen ? 12 : 20),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.list, 
+                  color: Colors.indigo, 
+                  size: isSmallScreen ? 18 : 24
+                ),
+                SizedBox(width: isSmallScreen ? 6 : 8),
+                Text(
+                  'Available Rooms',
+                  style: TextStyle(
+                    fontSize: isSmallScreen ? 16 : 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Spacer(),
+                Text(
+                  '${_rooms.length} room${_rooms.length == 1 ? '' : 's'}',
+                  style: TextStyle(
+                    color: Colors.grey,
+                    fontSize: isSmallScreen ? 12 : 14,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(height: isSmallScreen ? 6 : 12),
+          
+          // Room list
           Expanded(
             child: _buildRoomList(),
           ),
-          _buildRoomInput(),
         ],
       ),
     );

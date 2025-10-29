@@ -1,4 +1,3 @@
-// ignore_for_file: use_build_context_synchronously
 
 import 'package:flutter/material.dart';
 import '../services/sessionservice.dart';
@@ -41,9 +40,10 @@ class _SessionListScreenState extends State<SessionListScreen>
       });
     } catch (e) {
       setState(() => isLoading = false);
+      if(mounted){
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Failed to load sessions: $e")),
-      );
+      );}
     }
   }
 
@@ -51,13 +51,15 @@ class _SessionListScreenState extends State<SessionListScreen>
     try {
       await _sessionService.updateSessionStatus(sessionId, status);
       _loadSessions(); // refresh
+      if(mounted){
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Session $status")),
-      );
+      );}
     } catch (e) {
+      if(mounted){
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Failed to update session: $e")),
-      );
+      );}
     }
   }
 
@@ -69,7 +71,7 @@ class _SessionListScreenState extends State<SessionListScreen>
       lastDate: DateTime.now().add(const Duration(days: 365)),
     );
 
-    if (newDate == null) return;
+    if (!mounted || newDate == null) return;
 
     final TimeOfDay? newTime = await showTimePicker(
       context: context,
@@ -94,13 +96,15 @@ class _SessionListScreenState extends State<SessionListScreen>
       );
       
       _loadSessions(); // refresh
+      if(mounted){
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Session rescheduled successfully!")),
-      );
+      );}
     } catch (e) {
+      if(mounted){
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Failed to reschedule session: $e")),
-      );
+      );}
     }
   }
 
@@ -108,21 +112,75 @@ class _SessionListScreenState extends State<SessionListScreen>
     return sessions.where((s) => s['status'] == status).toList();
   }
 
-  // Responsive layout detection
-  bool get isSmallScreen {
-    final mediaQuery = MediaQuery.of(context);
-    return mediaQuery.size.width < 600;
+  // Enhanced responsive layout detection
+  ScreenType get _screenType {
+    final double width = MediaQuery.of(context).size.width;
+    if (width < 600) return ScreenType.small;
+    if (width < 1024) return ScreenType.medium;
+    return ScreenType.large;
   }
 
-  bool get isMediumScreen {
-    final mediaQuery = MediaQuery.of(context);
-    return mediaQuery.size.width >= 600 && mediaQuery.size.width < 1024;
+  // Responsive padding values
+  EdgeInsets get _screenPadding {
+    switch (_screenType) {
+      case ScreenType.small:
+        return const EdgeInsets.all(16);
+      case ScreenType.medium:
+        return const EdgeInsets.all(20);
+      case ScreenType.large:
+        return const EdgeInsets.all(24);
+    }
   }
 
-  bool get isLargeScreen {
-    final mediaQuery = MediaQuery.of(context);
-    return mediaQuery.size.width >= 1024;
+  // Responsive font sizes
+  double get _titleFontSize {
+    switch (_screenType) {
+      case ScreenType.small:
+        return 16;
+      case ScreenType.medium:
+        return 18;
+      case ScreenType.large:
+        return 20;
+    }
   }
+
+  double get _bodyFontSize {
+    switch (_screenType) {
+      case ScreenType.small:
+        return 14;
+      case ScreenType.medium:
+        return 16;
+      case ScreenType.large:
+        return 16;
+    }
+  }
+
+  // Responsive icon sizes
+  double get _iconSize {
+    switch (_screenType) {
+      case ScreenType.small:
+        return 16;
+      case ScreenType.medium:
+        return 18;
+      case ScreenType.large:
+        return 20;
+    }
+  }
+
+  // Responsive button padding
+  EdgeInsets get _buttonPadding {
+    switch (_screenType) {
+      case ScreenType.small:
+        return const EdgeInsets.symmetric(horizontal: 12, vertical: 10);
+      case ScreenType.medium:
+        return const EdgeInsets.symmetric(horizontal: 16, vertical: 12);
+      case ScreenType.large:
+        return const EdgeInsets.symmetric(horizontal: 20, vertical: 14);
+    }
+  }
+
+  // Minimum touch target size (44px for accessibility)
+  double get _minTouchSize => 44;
 
   Widget _buildSessionList(List<Map<String, dynamic>> list) {
     final theme = Theme.of(context);
@@ -131,20 +189,21 @@ class _SessionListScreenState extends State<SessionListScreen>
     if (list.isEmpty) {
       return Center(
         child: Padding(
-          padding: EdgeInsets.all(isSmallScreen ? 16.0 : 24.0),
+          padding: _screenPadding,
           child: Text(
             "No sessions here.",
             style: TextStyle(
-              fontSize: isSmallScreen ? 16 : 18,
+              fontSize: _bodyFontSize,
               color: isDark ? Colors.white70 : Colors.black54,
             ),
+            textAlign: TextAlign.center,
           ),
         ),
       );
     }
 
     // Use different layouts based on screen size
-    if (isLargeScreen) {
+    if (_screenType == ScreenType.large) {
       return _buildGridView(list);
     } else {
       return _buildListView(list);
@@ -152,47 +211,43 @@ class _SessionListScreenState extends State<SessionListScreen>
   }
 
   Widget _buildListView(List<Map<String, dynamic>> list) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
     return RefreshIndicator(
       onRefresh: _loadSessions,
       child: ListView.builder(
-        padding: EdgeInsets.symmetric(
-          vertical: isSmallScreen ? 12 : 16,
-          horizontal: isSmallScreen ? 16 : 24,
-        ),
+        padding: _screenPadding.copyWith(top: 12, bottom: 12),
         itemCount: list.length,
         itemBuilder: (context, index) {
-          return _buildSessionCard(list[index], isDark);
+          return Padding(
+            padding: EdgeInsets.only(bottom: _screenType == ScreenType.small ? 12 : 16),
+            child: _buildSessionCard(list[index]),
+          );
         },
       ),
     );
   }
 
   Widget _buildGridView(List<Map<String, dynamic>> list) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
     return RefreshIndicator(
       onRefresh: _loadSessions,
       child: GridView.builder(
-        padding: const EdgeInsets.all(24),
+        padding: _screenPadding,
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
+          crossAxisCount: _screenType == ScreenType.large ? 3 : 2,
           crossAxisSpacing: 16,
           mainAxisSpacing: 16,
-          childAspectRatio: isMediumScreen ? 1.5 : 1.8,
+          childAspectRatio: _screenType == ScreenType.large ? 1.6 : 1.4,
         ),
         itemCount: list.length,
         itemBuilder: (context, index) {
-          return _buildSessionCard(list[index], isDark);
+          return _buildSessionCard(list[index]);
         },
       ),
     );
   }
 
-  Widget _buildSessionCard(Map<String, dynamic> session, bool isDark) {
+  Widget _buildSessionCard(Map<String, dynamic> session) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final status = session['status'] ?? 'pending';
     final isPending = status == 'pending';
     final isAccepted = status == 'accepted';
@@ -201,9 +256,8 @@ class _SessionListScreenState extends State<SessionListScreen>
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       color: isDark ? Colors.grey[850] : Colors.white,
-      margin: EdgeInsets.symmetric(vertical: isSmallScreen ? 8 : 12),
       child: Padding(
-        padding: EdgeInsets.all(isSmallScreen ? 16.0 : 20.0),
+        padding: _screenPadding,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -213,16 +267,16 @@ class _SessionListScreenState extends State<SessionListScreen>
                 Icon(
                   Icons.person,
                   color: Colors.indigo,
-                  size: isSmallScreen ? 20 : 24,
+                  size: _iconSize + 2,
                 ),
-                SizedBox(width: isSmallScreen ? 12 : 16),
+                SizedBox(width: _screenType == ScreenType.small ? 12 : 16),
                 Expanded(
                   child: Text(
                     "${session['profiles_new']?['username'] ?? 'Unknown User'} "
                     "(${session['session_type'] ?? 'N/A'})",
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
-                      fontSize: isSmallScreen ? 16 : 18,
+                      fontSize: _titleFontSize,
                       color: isDark ? Colors.white : Colors.black87,
                     ),
                     maxLines: 2,
@@ -232,8 +286,8 @@ class _SessionListScreenState extends State<SessionListScreen>
                 if (!isPending)
                   Container(
                     padding: EdgeInsets.symmetric(
-                      horizontal: isSmallScreen ? 8 : 12,
-                      vertical: isSmallScreen ? 4 : 6,
+                      horizontal: _screenType == ScreenType.small ? 8 : 12,
+                      vertical: _screenType == ScreenType.small ? 4 : 6,
                     ),
                     decoration: BoxDecoration(
                       color: status == 'accepted' 
@@ -247,7 +301,7 @@ class _SessionListScreenState extends State<SessionListScreen>
                       status.toUpperCase(),
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
-                        fontSize: isSmallScreen ? 12 : 14,
+                        fontSize: _screenType == ScreenType.small ? 10 : 12,
                         color: status == 'accepted' 
                             ? Colors.green 
                             : status == 'rescheduled'
@@ -259,35 +313,32 @@ class _SessionListScreenState extends State<SessionListScreen>
               ],
             ),
             
-            SizedBox(height: isSmallScreen ? 8 : 12),
+            SizedBox(height: _screenType == ScreenType.small ? 12 : 16),
             
             // Session Details
             _buildDetailRow(
               Icons.calendar_today,
               "Date: ${session['session_date'] ?? 'N/A'} at ${session['session_time'] ?? 'N/A'}",
-              isDark,
             ),
             
-            SizedBox(height: isSmallScreen ? 4 : 8),
+            SizedBox(height: _screenType == ScreenType.small ? 8 : 12),
             
             _buildDetailRow(
               Icons.note,
               "Notes: ${session['notes'] ?? 'None'}",
-              isDark,
             ),
 
             // Rescheduled info if applicable
             if (session['rescheduled_at'] != null) ...[
-              SizedBox(height: isSmallScreen ? 4 : 8),
+              SizedBox(height: _screenType == ScreenType.small ? 8 : 12),
               _buildDetailRow(
                 Icons.schedule,
                 "Rescheduled on: ${_formatRescheduledDate(session['rescheduled_at'])}",
-                isDark,
               ),
             ],
             
             // Action Buttons
-            SizedBox(height: isSmallScreen ? 12 : 16),
+            SizedBox(height: _screenType == ScreenType.small ? 16 : 20),
             _buildActionButtons(session, isPending, isAccepted),
           ],
         ),
@@ -295,24 +346,27 @@ class _SessionListScreenState extends State<SessionListScreen>
     );
   }
 
-  Widget _buildDetailRow(IconData icon, String text, bool isDark) {
+  Widget _buildDetailRow(IconData icon, String text) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Icon(
           icon,
-          size: isSmallScreen ? 16 : 18,
+          size: _iconSize,
           color: isDark ? Colors.white60 : Colors.black54,
         ),
-        SizedBox(width: isSmallScreen ? 8 : 12),
+        SizedBox(width: _screenType == ScreenType.small ? 8 : 12),
         Expanded(
           child: Text(
             text,
             style: TextStyle(
-              fontSize: isSmallScreen ? 14 : 16,
+              fontSize: _bodyFontSize,
               color: isDark ? Colors.white70 : Colors.black54,
             ),
-            maxLines: 2,
+            maxLines: 3,
             overflow: TextOverflow.ellipsis,
           ),
         ),
@@ -321,108 +375,95 @@ class _SessionListScreenState extends State<SessionListScreen>
   }
 
   Widget _buildActionButtons(Map<String, dynamic> session, bool isPending, bool isAccepted) {
+    // For small screens, stack buttons vertically
+    if (_screenType == ScreenType.small && (isPending || isAccepted)) {
+      return Column(
+        children: _buildButtonChildren(session, isPending, isAccepted, true),
+      );
+    }
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.end,
-      children: [
-        if (isPending) ...[
-          // Pending session actions
-          Flexible(
-            child: ElevatedButton.icon(
-              icon: Icon(Icons.check, size: isSmallScreen ? 18 : 20),
-              label: Text(
-                "Accept",
-                style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white,
-                padding: EdgeInsets.symmetric(
-                  horizontal: isSmallScreen ? 12 : 16,
-                  vertical: isSmallScreen ? 8 : 12,
-                ),
-              ),
-              onPressed: () => _updateSessionStatus(session['id'], 'accepted'),
-            ),
-          ),
-          SizedBox(width: isSmallScreen ? 8 : 12),
-          Flexible(
-            child: ElevatedButton.icon(
-              icon: Icon(Icons.schedule, size: isSmallScreen ? 18 : 20),
-              label: Text(
-                "Reschedule",
-                style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.orange,
-                foregroundColor: Colors.white,
-                padding: EdgeInsets.symmetric(
-                  horizontal: isSmallScreen ? 12 : 16,
-                  vertical: isSmallScreen ? 8 : 12,
-                ),
-              ),
-              onPressed: () => _rescheduleSession(session),
-            ),
-          ),
-          SizedBox(width: isSmallScreen ? 8 : 12),
-          Flexible(
-            child: ElevatedButton.icon(
-              icon: Icon(Icons.close, size: isSmallScreen ? 18 : 20),
-              label: Text(
-                "Decline",
-                style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                foregroundColor: Colors.white,
-                padding: EdgeInsets.symmetric(
-                  horizontal: isSmallScreen ? 12 : 16,
-                  vertical: isSmallScreen ? 8 : 12,
-                ),
-              ),
-              onPressed: () => _updateSessionStatus(session['id'], 'declined'),
-            ),
-          ),
-        ] else if (isAccepted) ...[
-          // Accepted session actions - can still reschedule
-          Flexible(
-            child: ElevatedButton.icon(
-              icon: Icon(Icons.schedule, size: isSmallScreen ? 18 : 20),
-              label: Text(
-                "Reschedule",
-                style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.orange,
-                foregroundColor: Colors.white,
-                padding: EdgeInsets.symmetric(
-                  horizontal: isSmallScreen ? 12 : 16,
-                  vertical: isSmallScreen ? 8 : 12,
-                ),
-              ),
-              onPressed: () => _rescheduleSession(session),
-            ),
-          ),
-          SizedBox(width: isSmallScreen ? 8 : 12),
-          Flexible(
-            child: ElevatedButton.icon(
-              icon: Icon(Icons.cancel, size: isSmallScreen ? 18 : 20),
-              label: Text(
-                "Cancel",
-                style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                foregroundColor: Colors.white,
-                padding: EdgeInsets.symmetric(
-                  horizontal: isSmallScreen ? 12 : 16,
-                  vertical: isSmallScreen ? 8 : 12,
-                ),
-              ),
-              onPressed: () => _updateSessionStatus(session['id'], 'cancelled'),
-            ),
-          ),
-        ],
-      ],
+      children: _buildButtonChildren(session, isPending, isAccepted, false),
+    );
+  }
+
+  List<Widget> _buildButtonChildren(Map<String, dynamic> session, bool isPending, bool isAccepted, bool isVertical) {
+    final children = <Widget>[];
+    
+    if (isPending) {
+      children.addAll([
+        _buildActionButton(
+          icon: Icons.check,
+          label: "Accept",
+          color: Colors.green,
+          onPressed: () => _updateSessionStatus(session['id'], 'accepted'),
+          isVertical: isVertical,
+        ),
+        if (isVertical) SizedBox(height: 8) else SizedBox(width: 12),
+        _buildActionButton(
+          icon: Icons.schedule,
+          label: "Reschedule",
+          color: Colors.orange,
+          onPressed: () => _rescheduleSession(session),
+          isVertical: isVertical,
+        ),
+        if (isVertical) SizedBox(height: 8) else SizedBox(width: 12),
+        _buildActionButton(
+          icon: Icons.close,
+          label: "Decline",
+          color: Colors.red,
+          onPressed: () => _updateSessionStatus(session['id'], 'declined'),
+          isVertical: isVertical,
+        ),
+      ]);
+    } else if (isAccepted) {
+      children.addAll([
+        _buildActionButton(
+          icon: Icons.schedule,
+          label: "Reschedule",
+          color: Colors.orange,
+          onPressed: () => _rescheduleSession(session),
+          isVertical: isVertical,
+        ),
+        if (isVertical) SizedBox(height: 8) else SizedBox(width: 12),
+        _buildActionButton(
+          icon: Icons.cancel,
+          label: "Cancel",
+          color: Colors.red,
+          onPressed: () => _updateSessionStatus(session['id'], 'cancelled'),
+          isVertical: isVertical,
+        ),
+      ]);
+    }
+    
+    return children;
+  }
+
+  Widget _buildActionButton({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onPressed,
+    required bool isVertical,
+  }) {
+    return SizedBox(
+      width: isVertical ? double.infinity : null,
+      height: _minTouchSize,
+      child: ElevatedButton.icon(
+        icon: Icon(icon, size: _iconSize),
+        label: Text(
+          label,
+          style: TextStyle(fontSize: _bodyFontSize),
+        ),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: color,
+          foregroundColor: Colors.white,
+          padding: _buttonPadding,
+          minimumSize: Size(_minTouchSize, _minTouchSize),
+        ),
+        onPressed: onPressed,
+      ),
     );
   }
 
@@ -450,7 +491,7 @@ class _SessionListScreenState extends State<SessionListScreen>
           unselectedLabelColor: Colors.white70,
           indicatorColor: Colors.white,
           labelStyle: TextStyle(
-            fontSize: isSmallScreen ? 14 : 16,
+            fontSize: _bodyFontSize,
             fontWeight: FontWeight.w500,
           ),
           tabs: const [
@@ -460,16 +501,20 @@ class _SessionListScreenState extends State<SessionListScreen>
           ],
         ),
       ),
-      body: isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : TabBarView(
-              controller: _tabController,
-              children: [
-                _buildSessionList(_filterByStatus('pending')),
-                _buildSessionList(_filterByStatus('accepted')),
-                _buildSessionList(_filterByStatus('declined')),
-              ],
-            ),
+      body: SafeArea(
+        child: isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : TabBarView(
+                controller: _tabController,
+                children: [
+                  _buildSessionList(_filterByStatus('pending')),
+                  _buildSessionList(_filterByStatus('accepted')),
+                  _buildSessionList(_filterByStatus('declined')),
+                ],
+              ),
+      ),
     );
   }
 }
+
+enum ScreenType { small, medium, large }
