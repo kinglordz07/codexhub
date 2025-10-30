@@ -40,6 +40,10 @@ class _LearningToolsState extends State<LearningTools> {
     _loadContent();
     _subscribeToArticles();
     _startQuizTimer();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+    _testStorageConnection();
+    _debugBucketContents();
+    });
   }
 
   void _startQuizTimer() {
@@ -77,78 +81,324 @@ class _LearningToolsState extends State<LearningTools> {
   }
 
   Future<void> _downloadFile(Map<String, dynamic> article) async {
-    try {
-      final String? fileName = article['file_name'];
-      final String? filePath = article['file_path'];
+  try {
+    final String? fileName = article['file_name'];
+    final String? filePath = article['file_path'];
 
-      if (fileName == null || filePath == null) {
-        _showSnackBar('No file available for download', Colors.orange);
-        return;
-      }
+    if (fileName == null || filePath == null) {
+      _showSnackBar('No file available for download', Colors.orange);
+      return;
+    }
 
-      final permissionStatus = await _requestStoragePermissions();
-      if (!permissionStatus) {
-        _showSnackBar('Storage permission required', Colors.red);
-        return;
-      }
+    debugPrint('📋 DOWNLOAD DEBUG INFO:');
+    debugPrint('   - File Name: $fileName');
+    debugPrint('   - File Path from DB: $filePath');
 
+    // Show loading immediately
+    setState(() {
+      _isLoading = true;
+    });
+
+    final permissionStatus = await _requestStoragePermissions();
+    if (!permissionStatus) {
       setState(() {
-        _isLoading = true;
+        _isLoading = false;
       });
+      _showSnackBar('Storage permission required', Colors.red);
+      return;
+    }
 
-      final client = Supabase.instance.client;
-      final Directory downloadsDir = await getApplicationDocumentsDirectory();
-      final String localPath = '${downloadsDir.path}/$fileName';
-      final File file = File(localPath);
+    final client = Supabase.instance.client;
+    final Directory downloadsDir = await getApplicationDocumentsDirectory();
+    final String localPath = '${downloadsDir.path}/$fileName';
+    final File file = File(localPath);
 
-      if (await file.exists()) {
-        await OpenFilex.open(localPath);
-        _showSnackBar('File already exists. Opening...', Colors.blue);
+    // Check if file already exists
+    if (await file.exists()) {
+      setState(() {
+        _isLoading = false;
+      });
+      await OpenFilex.open(localPath);
+      _showSnackBar('File already exists. Opening...', Colors.blue);
+      return;
+    }
+
+    debugPrint('🔍 Starting download attempts...');
+
+    // Define all possible bucket/path combinations to try
+    final List<Map<String, String>> downloadAttempts = [
+      // Try learning_files bucket variations
+      {'bucket': 'learning_files', 'path': 'codexhub/resource-library/$fileName'},
+      {'bucket': 'learning_files', 'path': 'resource-library/$fileName'},
+      {'bucket': 'learning_files', 'path': 'codexhub/$fileName'},
+      {'bucket': 'learning_files', 'path': fileName},
+      
+      // Try resources bucket variations
+      {'bucket': 'resources', 'path': 'resource-library/$fileName'},
+      {'bucket': 'resources', 'path': fileName},
+      {'bucket': 'resources', 'path': filePath},
+      
+      // Try with just the filename in both buckets
+      {'bucket': 'learning_files', 'path': _extractFileName(filePath)},
+      {'bucket': 'resources', 'path': _extractFileName(filePath)},
+    ];
+
+    bool downloadSuccess = false;
+    List<int>? fileBytes;
+
+    for (int i = 0; i < downloadAttempts.length; i++) {
+      final attempt = downloadAttempts[i];
+      final bucket = attempt['bucket']!;
+      final path = attempt['path']!;
+      
+      try {
+        debugPrint('🔄 Attempt ${i + 1}/${downloadAttempts.length}:');
+        debugPrint('   Bucket: $bucket');
+        debugPrint('   Path: $path');
+        
+        final response = await client.storage
+            .from(bucket)
+            .download(path)
+            .timeout(const Duration(seconds: 10)); // Add timeout
+
+        if (response.isNotEmpty) {
+          debugPrint('✅ SUCCESS! File downloaded from:');
+          debugPrint('   Bucket: $bucket');
+          debugPrint('   Path: $path');
+          debugPrint('   File size: ${response.length} bytes');
+          
+          fileBytes = response;
+          downloadSuccess = true;
+          break;
+        } else {
+          debugPrint('⚠️ Empty response from bucket: $bucket, path: $path');
+        }
+      } catch (e) {
+        debugPrint('❌ Attempt ${i + 1} failed:');
+        debugPrint('   Bucket: $bucket');
+        debugPrint('   Path: $path');
+        debugPrint('   Error: ${e.toString()}');
+        
+        // Continue to next attempt
+      }
+      
+      // Small delay between attempts
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+
+    if (downloadSuccess && fileBytes != null) {
+      try {
+        // Ensure directory exists
+        final directory = file.parent;
+        if (!await directory.exists()) {
+          await directory.create(recursive: true);
+        }
+        
+        // Write file
+        await file.writeAsBytes(fileBytes);
+        
         setState(() {
           _isLoading = false;
         });
-        return;
+
+        // Try to open the file
+        await OpenFilex.open(localPath);
+        _showSnackBar('"$fileName" downloaded successfully!', Colors.green);
+        
+      } catch (e) {
+        setState(() {
+          _isLoading = false;
+        });
+        debugPrint('💥 Error writing file: $e');
+        _showSnackBar('Download completed but failed to open file', Colors.orange);
       }
-
-      String storageBucket = 'resources';
-      String actualFilePath = filePath;
-
-      if (filePath.contains('resource-library/')) {
-        storageBucket = 'learning_files';
-        actualFilePath = filePath.replaceFirst('resource-library/', '');
-      }
-
-      final response = await client.storage
-          .from(storageBucket)
-          .download(actualFilePath);
-
-      await file.writeAsBytes(response);
-
+    } else {
       setState(() {
         _isLoading = false;
       });
-
-      await OpenFilex.open(localPath);
-      _showSnackBar('"$fileName" downloaded successfully!', Colors.green);
-
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-      });
-      _showSnackBar('Download failed: ${e.toString()}', Colors.red);
+      
+      debugPrint('💥 All download attempts failed');
+      _showSnackBar('Download failed: File not found in storage', Colors.red);
+      
+      // Debug bucket contents to help diagnose
+      await _debugAllBucketContents();
     }
+
+  } catch (e) {
+    setState(() {
+      _isLoading = false;
+    });
+    debugPrint('💥 Critical download error: $e');
+    _showSnackBar('Download failed: ${e.toString()}', Colors.red);
   }
+}
+
+// Helper function to extract just the filename from path
+String _extractFileName(String path) {
+  return path.split('/').last;
+}
+
+// Enhanced debug function
+Future<void> _debugAllBucketContents() async {
+  try {
+    final client = Supabase.instance.client;
+    debugPrint('🔍 DEBUG: Checking all bucket contents...');
+    
+    final buckets = ['learning_files', 'resources'];
+    
+    for (final bucketName in buckets) {
+      try {
+        debugPrint('\n📦 Checking bucket: $bucketName');
+        final files = await client.storage.from(bucketName).list();
+        debugPrint('📁 Total files in $bucketName: ${files.length}');
+        
+        for (final file in files) {
+          debugPrint('   - ${file.name} (folder: ${file.id == null})');
+          
+          // If it's a folder, list its contents
+          if (file.id == null || file.name.endsWith('/')) {
+            try {
+              final folderFiles = await client.storage.from(bucketName).list(path: file.name);
+              debugPrint('     📂 Contents of ${file.name} (${folderFiles.length} items):');
+              for (final folderFile in folderFiles) {
+                debugPrint('       - ${folderFile.name}');
+                
+                // Check subfolders
+                if (folderFile.id == null || folderFile.name.endsWith('/')) {
+                  try {
+                    final subFiles = await client.storage.from(bucketName).list(
+                      path: '${file.name}/${folderFile.name}'
+                    );
+                    debugPrint('         📁 Contents of ${file.name}/${folderFile.name} (${subFiles.length} items):');
+                    for (final subFile in subFiles) {
+                      debugPrint('           - ${subFile.name}');
+                    }
+                  } catch (e) {
+                    debugPrint('         ❌ Error listing subfolder: $e');
+                  }
+                }
+              }
+            } catch (e) {
+              debugPrint('     ❌ Error listing folder ${file.name}: $e');
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('❌ Error accessing bucket $bucketName: $e');
+      }
+    }
+    
+  } catch (e) {
+    debugPrint('💥 Error debugging bucket contents: $e');
+  }
+}
+
+Future<void> _testStorageConnection() async {
+  try {
+    final client = Supabase.instance.client;
+    debugPrint('🔧 Testing storage connection...');
+    
+    // List available buckets
+    final buckets = await client.storage.listBuckets();
+    debugPrint('📦 Available buckets:');
+    for (final bucket in buckets) {
+      debugPrint('   - ${bucket.name} (id: ${bucket.id})');
+    }
+    
+    // Test file existence for our target file
+    final fileName = '1761797210317_Thank you for using Documents.docx';
+    debugPrint('\n🔎 Testing file existence for: $fileName');
+    
+    final testBuckets = ['learning_files', 'resources'];
+    for (final bucketName in testBuckets) {
+      try {
+        final files = await client.storage.from(bucketName).list();
+        final matchingFiles = files.where((file) => file.name.contains(fileName)).toList();
+        if (matchingFiles.isNotEmpty) {
+          debugPrint('✅ File found in $bucketName:');
+          for (final file in matchingFiles) {
+            debugPrint('   - ${file.name}');
+          }
+        }
+      } catch (e) {
+        debugPrint('❌ Error checking $bucketName: $e');
+      }
+    }
+    
+  } catch (e) {
+    debugPrint('💥 Storage connection test failed: $e');
+  }
+}
+
+// Add this helper function to debug bucket contents
+Future<void> _debugBucketContents() async {
+  try {
+    final client = Supabase.instance.client;
+    
+    debugPrint('🔍 DEBUG: Checking bucket contents...');
+    
+    // Check learning_files bucket
+    try {
+      final learningFiles = await client.storage.from('learning_files').list();
+      debugPrint('📁 Files in learning_files bucket (${learningFiles.length}):');
+      for (final file in learningFiles) {
+        debugPrint('   - ${file.name}');
+        
+        // If it's a folder, list its contents
+        if (file.name == 'codexhub' || file.name.endsWith('/')) {
+          try {
+            final folderFiles = await client.storage.from('learning_files').list(path: file.name);
+            debugPrint('   📂 Contents of ${file.name} (${folderFiles.length}):');
+            for (final folderFile in folderFiles) {
+              debugPrint('     - ${folderFile.name}');
+            }
+          } catch (e) {
+            debugPrint('   ❌ Error listing folder ${file.name}: $e');
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ Error accessing learning_files bucket: $e');
+    }
+    
+    // Check resources bucket
+    try {
+      final resourcesFiles = await client.storage.from('resources').list();
+      debugPrint('📁 Files in resources bucket (${resourcesFiles.length}):');
+      for (final file in resourcesFiles) {
+        debugPrint('   - ${file.name}');
+      }
+    } catch (e) {
+      debugPrint('❌ Error accessing resources bucket: $e');
+    }
+    
+  } catch (e) {
+    debugPrint('💥 Error debugging bucket contents: $e');
+  }
+}
 
   Future<bool> _requestStoragePermissions() async {
-    if (Platform.isAndroid) {
+  if (Platform.isAndroid) {
+    try {
+      // For Android 13+, we need to request both storage and media permissions
+      final Map<Permission, PermissionStatus> statuses = await [
+        Permission.storage,
+        if (await Permission.mediaLibrary.isRestricted) Permission.mediaLibrary,
+      ].request();
+      
+      return statuses[Permission.storage]?.isGranted == true;
+    } catch (e) {
+      debugPrint('Permission error: $e');
+      // Fallback to just storage permission
       var status = await Permission.storage.status;
       if (!status.isGranted) {
         status = await Permission.storage.request();
-        return status.isGranted;
       }
+      return status.isGranted;
     }
-    return true;
   }
+  return true; // For iOS
+}
 
   void _showSnackBar(String message, Color backgroundColor) {
     ScaffoldMessenger.of(context).showSnackBar(

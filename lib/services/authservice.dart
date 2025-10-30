@@ -135,7 +135,7 @@ Future<Map<String, dynamic>> signUp({
         'success': true, 
         'user': user, 
         'profile': profileInsert,
-        'message': 'Account created successfully! Please check your email for verification.',
+        'message': 'Account created successfully!, Please wait for Admin approval',
         'userId': user.id,
         'requiresEmailVerification': user.emailConfirmedAt == null,
       };

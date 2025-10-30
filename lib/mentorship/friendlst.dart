@@ -502,35 +502,54 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
             color: Colors.grey[600],
           ),
         ),
-        trailing: SizedBox(
-          width: isVerySmallScreen ? 100 : 120,
+        trailing: ConstrainedBox(
+          constraints: BoxConstraints(
+          maxWidth: isVerySmallScreen ? 90 : 110,),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              IconButton(
+              Flexible(
+                child: IconButton(
                 icon: Icon(Icons.check, size: iconSize - 6),
                 color: Colors.green,
                 onPressed: onAccept,
                 tooltip: 'Accept',
+                padding: isVerySmallScreen ? EdgeInsets.all(4) : EdgeInsets.all(8),
+                constraints: BoxConstraints(
+                  minWidth: isVerySmallScreen ? 32 : 40,
+                ),
               ),
-              IconButton(
+              ),
+              Flexible(
+              child: IconButton(
                 icon: Icon(Icons.close, size: iconSize - 6),
                 color: Colors.red,
                 onPressed: onReject,
                 tooltip: 'Reject',
+                padding: isVerySmallScreen ? EdgeInsets.all(4) : EdgeInsets.all(8),
+                constraints: BoxConstraints(
+                  minWidth: isVerySmallScreen ? 32 : 40,
+                ),
               ),
-              IconButton(
+            ),
+            Flexible(
+              child: IconButton(
                 icon: Icon(Icons.chat, size: iconSize - 6),
                 color: Colors.indigo,
                 onPressed: onChat,
                 tooltip: 'Chat',
+                padding: isVerySmallScreen ? EdgeInsets.all(4) : EdgeInsets.all(8),
+                constraints: BoxConstraints(
+                  minWidth: isVerySmallScreen ? 32 : 40,
+                ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildFriendCard({
     required String username,
