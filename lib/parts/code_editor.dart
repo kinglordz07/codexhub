@@ -6,7 +6,6 @@ import 'package:flutter_code_editor/flutter_code_editor.dart';
 import 'package:highlight/languages/java.dart';
 import 'package:highlight/languages/cs.dart';
 import 'package:highlight/languages/python.dart';
-import 'package:highlight/languages/vbscript.dart';
 import 'package:flutter_highlight/themes/github.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -41,21 +40,22 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
   bool _isLoadingRooms = false;
   String _currentRoomTitle = 'Untitled';
   String? _currentRoomDescription;
+  bool _isExecuting = false;
 
-  // Use consistent language keys
+  // Use consistent language keys - VB.NET REMOVED
   final Map<String, Mode> _languages = {
     'python': python,
     'java': java,
     'csharp': cs,
-    'vb': vbscript,
+    // 'vb': vbscript, // REMOVED VB.NET
   };
 
-  // Map our language keys to Piston API language names and versions
+  // Map our language keys to Piston API language names and versions - VB.NET REMOVED
   final Map<String, Map<String, String>> _pistonLanguages = {
     'python': {'language': 'python', 'version': '3.10.0'},
     'java': {'language': 'java', 'version': '15.0.2'},
     'csharp': {'language': 'csharp', 'version': '6.12.0'},
-    'vb': {'language': 'vb', 'version': '1.4.0'},
+    // 'vb': {'language': 'vb', 'version': '1.4.0'}, // REMOVED VB.NET
   };
 
   @override
@@ -523,11 +523,14 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
   }
 
   Future<void> _runCode() async {
+    if (_isExecuting) return;
+    
     _tabController.animateTo(1);
 
     if (mounted) {
       setState(() {
-        _output = "Running ${_getDisplayName(_selectedLanguage)} code...";
+        _isExecuting = true;
+        _output = "🔄 Running ${_getDisplayName(_selectedLanguage)} code...";
       });
     }
 
@@ -538,7 +541,8 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
         if (mounted) {
           setState(() {
             _output =
-                'Error: Language $_selectedLanguage is not supported for execution';
+                '❌ Error: Language $_selectedLanguage is not supported for execution';
+            _isExecuting = false;
           });
         }
         return;
@@ -562,24 +566,31 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final runData = data['run'];
+        String outputText;
+        
+        if (runData['stderr']?.isNotEmpty == true) {
+          outputText = '❌ ERROR:\n${runData['stderr']}';
+        } else if (runData['stdout']?.isNotEmpty == true) {
+          outputText = '✅ OUTPUT:\n${runData['stdout']}';
+        } else {
+          outputText = '✅ Program executed successfully (no output)';
+        }
+
         if (mounted) {
           setState(() {
-            _output = runData['stdout']?.isNotEmpty == true
-                ? runData['stdout']
-                : (runData['stderr']?.isNotEmpty == true
-                    ? runData['stderr']
-                    : 'No output');
+            _output = outputText;
+            _isExecuting = false;
           });
         }
         return; // Online execution succeeded
+      } else {
+        throw Exception('HTTP ${response.statusCode}');
       }
     } catch (e) {
       // Online execution failed, fall back to offline simulation
       debugPrint('Online execution failed: $e');
+      await _simulateOfflineExecution();
     }
-
-    // OFFLINE SIMULATION
-    await _simulateOfflineExecution();
   }
 
   Future<void> _simulateOfflineExecution() async {
@@ -593,7 +604,7 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
 
     // Analyze code patterns and provide simulated output
     if (code.trim().isEmpty) {
-      simulatedOutput = '🔴 No code to execute\nPlease write some code first.';
+      simulatedOutput = '❌ No code to execute\nPlease write some code first.';
     } else if (_containsPattern(code, [
       'print',
       'console.log',
@@ -622,18 +633,19 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
     if (mounted) {
       setState(() {
         _output = '''🟡 OFFLINE SIMULATION MODE
-Connected to Local Dart VM
-Language: ${_getDisplayName(_selectedLanguage)}
-Process ID: ${random.nextInt(9999)}
+🌐 Connection: Offline
+💻 Language: ${_getDisplayName(_selectedLanguage)}
+📊 Process ID: ${random.nextInt(9999)}
 
 --- Execution Output ---
 $simulatedOutput
 
 --- Program Finished ---
 Exit code: 0
-Execution time: ${0.5 + random.nextDouble() * 2}s
+⏱️ Execution time: ${(0.5 + random.nextDouble() * 2).toStringAsFixed(2)}s
 
 💡 Tip: Connect to internet for real code execution''';
+        _isExecuting = false;
       });
     }
   }
@@ -687,13 +699,13 @@ Execution time: ${0.5 + random.nextDouble() * 2}s
     final output = StringBuffer();
     final iterations = 3 + random.nextInt(5); // Simulate 3-7 iterations
 
-    output.writeln('Loop executing $iterations times:');
+    output.writeln('🔄 Loop executing $iterations times:');
 
     for (int i = 0; i < iterations; i++) {
-      output.writeln('Iteration $i: i = $i, value = ${random.nextInt(100)}');
+      output.writeln('📝 Iteration $i: i = $i, value = ${random.nextInt(100)}');
     }
 
-    output.writeln('Loop completed successfully');
+    output.writeln('✅ Loop completed successfully');
     return output.toString();
   }
 
@@ -708,9 +720,9 @@ Execution time: ${0.5 + random.nextDouble() * 2}s
     ];
     final selectedCondition = conditions[random.nextInt(conditions.length)];
 
-    return '''Condition evaluated: $selectedCondition
-Branch executed: ${random.nextBool() ? 'if block' : 'else block'}
-Result: ${random.nextBool() ? 'Condition met' : 'Condition not met'}''';
+    return '''🔍 Condition evaluated: $selectedCondition
+📋 Branch executed: ${random.nextBool() ? 'if block' : 'else block'}
+🎯 Result: ${random.nextBool() ? 'Condition met' : 'Condition not met'}''';
   }
 
   String _simulateFunctions(String code) {
@@ -724,20 +736,20 @@ Result: ${random.nextBool() ? 'Condition met' : 'Condition not met'}''';
     ];
     final calledFunction = functions[random.nextInt(functions.length)];
 
-    return '''Function $calledFunction called
-Parameters processed: ${random.nextInt(5)}
-Return value: ${random.nextInt(100)}
-Execution completed in ${random.nextDouble() * 10}ms''';
+    return '''📞 Function $calledFunction called
+⚙️ Parameters processed: ${random.nextInt(5)}
+📤 Return value: ${random.nextInt(100)}
+✅ Execution completed in ${random.nextDouble() * 10}ms''';
   }
 
   String _simulateCalculations(String code) {
     final random = Random();
     final calculations = [
-      'Result: ${random.nextInt(100)}',
-      'Sum: ${random.nextInt(50) + random.nextInt(50)}',
-      'Product: ${random.nextInt(10) * random.nextInt(10)}',
-      'Average: ${random.nextDouble() * 100}',
-      'Calculation completed successfully',
+      '🧮 Result: ${random.nextInt(100)}',
+      '➕ Sum: ${random.nextInt(50) + random.nextInt(50)}',
+      '✖️ Product: ${random.nextInt(10) * random.nextInt(10)}',
+      '📊 Average: ${(random.nextDouble() * 100).toStringAsFixed(2)}',
+      '✅ Calculation completed successfully',
     ];
 
     return calculations[random.nextInt(calculations.length)];
@@ -749,13 +761,13 @@ Execution completed in ${random.nextDouble() * 10}ms''';
     final chars = code.length;
 
     final outputs = [
-      'Program executed successfully',
-      'Code processed without errors',
-      'Execution completed',
-      '$lines lines of code processed',
-      '$chars characters compiled successfully',
-      'No output generated (program may be waiting for input)',
-      'Execution finished with exit code 0',
+      '✅ Program executed successfully',
+      '📝 Code processed without errors',
+      '🎉 Execution completed',
+      '📄 $lines lines of code processed',
+      '🔤 $chars characters compiled successfully',
+      'ℹ️ No output generated (program may be waiting for input)',
+      '🏁 Execution finished with exit code 0',
     ];
 
     return outputs[random.nextInt(outputs.length)];
@@ -793,8 +805,7 @@ Execution completed in ${random.nextDouble() * 10}ms''';
         return 'Java';
       case 'csharp':
         return 'C#';
-      case 'vb':
-        return 'VB';
+      // 'vb': return 'VB', // REMOVED
       default:
         return value;
     }
@@ -808,8 +819,7 @@ Execution completed in ${random.nextDouble() * 10}ms''';
         return 'Java';
       case 'csharp':
         return 'C#';
-      case 'vb':
-        return 'VB';
+      // 'vb': return 'VB', // REMOVED
       default:
         return lang;
     }
@@ -884,7 +894,6 @@ Execution completed in ${random.nextDouble() * 10}ms''';
     final isVerySmallScreen = screenSize.width < 400;
     final isTablet = screenSize.width >= 600 && screenSize.width < 1200;
 
-
     // Adjust font sizes and padding based on screen size
     final double titleFontSize = isVerySmallScreen ? 14 : (isSmallScreen ? 16 : (isTablet ? 18 : 20));
     final double bodyFontSize = isVerySmallScreen ? 12 : (isSmallScreen ? 14 : 16);
@@ -947,7 +956,7 @@ Execution completed in ${random.nextDouble() * 10}ms''';
           ],
         ),
         actions: [
-          // Theme toggle button - always visible but with appropriate size
+          // Theme toggle button
           IconButton(
             icon: Icon(
               _isDarkMode ? Icons.dark_mode : Icons.light_mode,
@@ -958,13 +967,25 @@ Execution completed in ${random.nextDouble() * 10}ms''';
             padding: EdgeInsets.all(isVerySmallScreen ? 4 : 8),
           ),
           
-          // Run button - always visible
-          IconButton(
-            icon: Icon(Icons.play_arrow, size: iconSize),
-            onPressed: _runCode,
-            tooltip: 'Run Code',
-            padding: EdgeInsets.all(isVerySmallScreen ? 4 : 8),
-          ),
+          // Run button with loading indicator
+          _isExecuting
+              ? Padding(
+                  padding: EdgeInsets.all(isVerySmallScreen ? 4 : 8),
+                  child: SizedBox(
+                    width: iconSize,
+                    height: iconSize,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  ),
+                )
+              : IconButton(
+                  icon: Icon(Icons.play_arrow, size: iconSize),
+                  onPressed: _runCode,
+                  tooltip: 'Run Code',
+                  padding: EdgeInsets.all(isVerySmallScreen ? 4 : 8),
+                ),
           
           // Language dropdown - visible on all but very small screens
           if (!isVerySmallScreen) ...[
@@ -1143,7 +1164,7 @@ Execution completed in ${random.nextDouble() * 10}ms''';
               child: SingleChildScrollView(
                 child: SelectableText(
                   _output.isEmpty
-                      ? 'Output will appear here after running code...'
+                      ? 'Output will appear here after running code...\n\n💡 Tip: Click the "Run" button to execute your code'
                       : _output,
                   style: TextStyle(
                     fontFamily: 'SourceCodePro',
@@ -1392,8 +1413,7 @@ Execution completed in ${random.nextDouble() * 10}ms''';
         return Icons.coffee;
       case 'csharp':
         return Icons.code;
-      case 'vb':
-        return Icons.data_object;
+      // 'vb': return Icons.data_object, // REMOVED
       default:
         return Icons.insert_drive_file;
     }

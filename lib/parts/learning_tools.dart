@@ -22,7 +22,7 @@ class _LearningToolsState extends State<LearningTools> {
   List<Map<String, dynamic>> _articles = [];
   List<Map<String, dynamic>> _quizQuestions = [];
   Map<String, List<String>> _videoIds = {};
-  List<Map<String, dynamic>> _videoData = []; // ADDED: Store full video data
+  List<Map<String, dynamic>> _videoData = []; 
 
   // Quiz state
   int _quizIndex = 0;
@@ -160,7 +160,6 @@ class _LearningToolsState extends State<LearningTools> {
     );
   }
 
-  // ADDED: Extract video ID from YouTube URL
   String? _extractVideoIdFromUrl(String url) {
     final regExp = RegExp(
       r'^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*',
@@ -170,7 +169,6 @@ class _LearningToolsState extends State<LearningTools> {
     return (match != null && match.group(7)!.length == 11) ? match.group(7) : null;
   }
 
-  // ADDED: Open YouTube video
   Future<void> _openYouTubeVideo(String videoId) async {
     final url = 'https://www.youtube.com/watch?v=$videoId';
     final uri = Uri.parse(url);
@@ -246,8 +244,7 @@ class _LearningToolsState extends State<LearningTools> {
       debugPrint('Error loading uploaded videos: $e');
     }
 
-    // ✅ FIX: Make sure this variable is named correctly
-    List<Map<String, dynamic>> quizResponse = []; // ✅ CORRECT NAME
+    List<Map<String, dynamic>> quizResponse = []; 
     try {
       quizResponse = await client.from('quizzes').select().eq('is_active', true);
       quizResponse = quizResponse.map((quiz) {
@@ -260,18 +257,18 @@ class _LearningToolsState extends State<LearningTools> {
         };
       }).toList();
     } catch (e) {
-      quizResponse = _generateFallbackQuiz(); // ✅ CORRECT NAME
+      quizResponse = _generateFallbackQuiz(); 
     }
 
-    if (quizResponse.isEmpty) { // ✅ CORRECT NAME
-      quizResponse = _generateFallbackQuiz(); // ✅ CORRECT NAME
+    if (quizResponse.isEmpty) { 
+      quizResponse = _generateFallbackQuiz(); 
     }
 
     final processedArticles = _processArticles(articlesResponse);
 
     setState(() {
       _articles = processedArticles;
-
+      _quizQuestions = quizResponse;
       _videoIds = {};
       _videoData = videosResponse;
       
@@ -298,8 +295,6 @@ class _LearningToolsState extends State<LearningTools> {
         };
       }
 
-      // ✅ FIX: Use the correct variable name
-      _quizQuestions = quizResponse; // ✅ NOW THIS SHOULD WORK
       _quizQuestions.shuffle(Random());
       _isLoading = false;
     });
@@ -337,10 +332,9 @@ class _LearningToolsState extends State<LearningTools> {
     return 'CodexHub Mentor';
   }
 
-  // ADDED: Helper to get video uploader name
   String _getVideoUploaderName(Map<String, dynamic> video) {
     try {
-      // Check if we have joined profile data
+
       if (video['profiles_new'] != null) {
         final profile = video['profiles_new'];
         if (profile is Map<String, dynamic> && profile['username'] != null) {
@@ -497,7 +491,9 @@ class _LearningToolsState extends State<LearningTools> {
                             Row(children: [
                               Icon(Icons.attach_file, color: Colors.green),
                               SizedBox(width: isSmallScreen ? 6 : 8),
-                              Text('Attached File:', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green[800], fontSize: isSmallScreen ? 14 : 16)),
+                              Text('Attached File:', 
+                              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green[800], 
+                              fontSize: isSmallScreen ? 14 : 16)),
                             ]),
                             SizedBox(height: isSmallScreen ? 6 : 8),
                             Text(fileName!, style: TextStyle(color: Colors.green[700], fontSize: isSmallScreen ? 12 : 14)),
@@ -557,177 +553,194 @@ class _LearningToolsState extends State<LearningTools> {
     );
   }
 
-  // UPDATED: Enhanced video section that shows video_urls data
-  Widget _buildVideoSection(String title, List<String> videoIds) {
-    final screenSize = MediaQuery.of(context).size;
-    final isSmallScreen = screenSize.width < 600;
+Widget _buildVideoSection(String title, List<String> videoIds) {
+  final screenSize = MediaQuery.of(context).size;
+  final isSmallScreen = screenSize.width < 600;
 
-    // Find videos in this category from video_urls table
-    final categoryVideos = _videoData.where((video) {
-      final videoCategory = video['category'] as String? ?? 'General';
-      return videoCategory == title;
-    }).toList();
+  final categoryVideos = _videoData.where((video) {
+    final videoCategory = video['category'] as String? ?? 'General';
+    return videoCategory == title;
+  }).toList();
 
-    if (categoryVideos.isEmpty) {
-      return _buildNoVideosPlaceholder(title, isSmallScreen);
-    }
+  if (categoryVideos.isEmpty) {
+    return _buildNoVideosPlaceholder(title, isSmallScreen);
+  }
 
-    return Column(
+  return ListView( 
+    shrinkWrap: true,
+    physics: const NeverScrollableScrollPhysics(),
+    padding: EdgeInsets.zero,
+    children: [
+      Text(
+        '$title Tutorials', 
+        style: TextStyle(
+          fontSize: isSmallScreen ? 16 : 18, 
+          fontWeight: FontWeight.bold
+        ),
+      ),
+      SizedBox(height: isSmallScreen ? 6 : 8),
+      SizedBox(
+        height: isSmallScreen ? 200 : 220,
+        child: ListView.builder(
+          scrollDirection: Axis.horizontal,
+          itemCount: categoryVideos.length,
+          itemBuilder: (context, index) {
+            final video = categoryVideos[index];
+            final youtubeUrl = video['youtube_url'] as String? ?? '';
+            final videoId = _extractVideoIdFromUrl(youtubeUrl);
+            final videoTitle = video['title'] as String? ?? 'Untitled Video';
+            final uploaderName = _getVideoUploaderName(video);
+            final thumbnail = video['youtube_thumbnail'] as String?;
+
+            return GestureDetector(
+              onTap: () => _openYouTubeVideo(videoId ?? ''),
+              child: Container(
+                width: isSmallScreen ? 260 : 300,
+                margin: EdgeInsets.only(
+                  right: index == categoryVideos.length - 1 ? 0 : isSmallScreen ? 8 : 12,
+                  left: index == 0 ? isSmallScreen ? 8 : 12 : 0,
+                ),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  color: Colors.white,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black12,
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      height: isSmallScreen ? 120 : 140,
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(12),
+                          topRight: Radius.circular(12),
+                        ),
+                        image: thumbnail != null 
+                            ? DecorationImage(
+                                image: NetworkImage(thumbnail),
+                                fit: BoxFit.cover,
+                              )
+                            : DecorationImage(
+                                image: NetworkImage('https://img.youtube.com/vi/$videoId/0.jpg'),
+                                fit: BoxFit.cover,
+                              ),
+                      ),
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          child: const Icon(
+                            Icons.play_arrow,
+                            color: Colors.white,
+                            size: 30,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: EdgeInsets.all(isSmallScreen ? 8 : 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            videoTitle,
+                            style: TextStyle(
+                              fontSize: isSmallScreen ? 14 : 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          SizedBox(height: isSmallScreen ? 4 : 6),
+                          Text(
+                            'By: $uploaderName',
+                            style: TextStyle(
+                              fontSize: isSmallScreen ? 12 : 14,
+                              color: Colors.grey[600],
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          SizedBox(height: isSmallScreen ? 2 : 4),
+                          Text(
+                            'Tap to watch on YouTube',
+                            style: TextStyle(
+                              fontSize: isSmallScreen ? 11 : 13,
+                              color: Colors.blue[600],
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+      SizedBox(height: isSmallScreen ? 12 : 16),
+    ],
+  );
+}
+
+  Widget _buildNoVideosPlaceholder(String title, bool isSmallScreen) {
+  return SizedBox( 
+    width: double.infinity,
+    child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min, 
       children: [
         Text(
           '$title Tutorials', 
-          style: TextStyle(
-            fontSize: isSmallScreen ? 16 : 18, 
-            fontWeight: FontWeight.bold
-          ),
+          style: TextStyle(fontSize: isSmallScreen ? 16 : 18, fontWeight: FontWeight.bold)
         ),
-        SizedBox(height: isSmallScreen ? 6 : 8),
-        SizedBox(
-          height: isSmallScreen ? 200 : 220,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            itemCount: categoryVideos.length,
-            itemBuilder: (context, index) {
-              final video = categoryVideos[index];
-              final youtubeUrl = video['youtube_url'] as String? ?? '';
-              final videoId = _extractVideoIdFromUrl(youtubeUrl);
-              final videoTitle = video['title'] as String? ?? 'Untitled Video';
-              final uploaderName = _getVideoUploaderName(video);
-              final thumbnail = video['youtube_thumbnail'] as String?;
-
-              return GestureDetector(
-                onTap: () => _openYouTubeVideo(videoId ?? ''),
-                child: Container(
-                  width: isSmallScreen ? 260 : 300,
-                  margin: EdgeInsets.only(
-                    right: index == categoryVideos.length - 1 ? 0 : isSmallScreen ? 8 : 12,
-                    left: index == 0 ? isSmallScreen ? 8 : 12 : 0,
-                  ),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    color: Colors.white,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black12,
-                        blurRadius: 4,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // YouTube thumbnail
-                      Container(
-                        height: isSmallScreen ? 120 : 140,
-                        width: double.infinity,
-                        decoration: BoxDecoration(
-                          borderRadius: const BorderRadius.only(
-                            topLeft: Radius.circular(12),
-                            topRight: Radius.circular(12),
-                          ),
-                          image: thumbnail != null 
-                              ? DecorationImage(
-                                  image: NetworkImage(thumbnail),
-                                  fit: BoxFit.cover,
-                                )
-                              : DecorationImage(
-                                  image: NetworkImage('https://img.youtube.com/vi/$videoId/0.jpg'),
-                                  fit: BoxFit.cover,
-                                ),
-                        ),
-                        child: Center(
-                          child: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.black54,
-                              borderRadius: BorderRadius.circular(24),
-                            ),
-                            child: const Icon(
-                              Icons.play_arrow,
-                              color: Colors.white,
-                              size: 30,
-                            ),
-                          ),
-                        ),
-                      ),
-                      Padding(
-                        padding: EdgeInsets.all(isSmallScreen ? 8 : 10),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              videoTitle,
-                              style: TextStyle(
-                                fontSize: isSmallScreen ? 14 : 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            SizedBox(height: isSmallScreen ? 4 : 6),
-                            Text(
-                              'By: $uploaderName',
-                              style: TextStyle(
-                                fontSize: isSmallScreen ? 12 : 14,
-                                color: Colors.grey[600],
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            SizedBox(height: isSmallScreen ? 2 : 4),
-                            Text(
-                              'Tap to watch on YouTube',
-                              style: TextStyle(
-                                fontSize: isSmallScreen ? 11 : 13,
-                                color: Colors.blue[600],
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-        SizedBox(height: isSmallScreen ? 12 : 16),
-      ],
-    );
-  }
-
-  Widget _buildNoVideosPlaceholder(String title, bool isSmallScreen) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('$title Tutorials', style: TextStyle(fontSize: isSmallScreen ? 16 : 18, fontWeight: FontWeight.bold)),
         SizedBox(height: isSmallScreen ? 6 : 8),
         Container(
           height: isSmallScreen ? 150 : 200,
-          decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(12)),
+          decoration: BoxDecoration(
+            color: Colors.grey[200], 
+            borderRadius: BorderRadius.circular(12)
+          ),
           child: Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min, 
               children: [
                 Icon(Icons.videocam_off, size: isSmallScreen ? 30 : 40, color: Colors.grey),
                 SizedBox(height: isSmallScreen ? 6 : 8),
-                Text('No videos available', style: TextStyle(fontSize: isSmallScreen ? 14 : 16, color: Colors.grey)),
+                Text(
+                  'No videos available', 
+                  style: TextStyle(fontSize: isSmallScreen ? 14 : 16, color: Colors.grey)
+                ),
                 SizedBox(height: isSmallScreen ? 4 : 6),
-                Text('Add videos from Resource Library', style: TextStyle(fontSize: isSmallScreen ? 12 : 14, color: Colors.grey)),
+                Text(
+                  'Add videos from Resource Library', 
+                  style: TextStyle(fontSize: isSmallScreen ? 12 : 14, color: Colors.grey)
+                ),
               ],
             ),
           ),
         ),
         SizedBox(height: isSmallScreen ? 12 : 16),
       ],
-    );
-  }
+    ),
+  );
+}
 
-  // Quiz Methods (remain the same)
   void _answerQuestion(String answer) {
     if (_quizFinished || _showAnswerFeedback) return;
 
@@ -918,41 +931,42 @@ class _LearningToolsState extends State<LearningTools> {
   }
 
   Widget _buildQuizQuestion() {
-    final isSmallScreen = MediaQuery.of(context).size.width < 600;
+  final isSmallScreen = MediaQuery.of(context).size.width < 600;
 
-    if (_quizQuestions.isEmpty) {
-      return Center(child: Text('No quiz questions available.', style: TextStyle(fontSize: isSmallScreen ? 14 : 16, color: Colors.grey)));
-    }
-
-    final q = _quizQuestions[_quizIndex];
-    final correctAnswer = q['correct'] as String;
-    final isCorrect = _selectedAnswer == correctAnswer;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildQuizHeader(),
-        _buildQuestionCard(q),
-        SizedBox(height: isSmallScreen ? 12 : 16),
-        _buildAnswerOptions(q),
-        if (_showAnswerFeedback) ...[
-          SizedBox(height: isSmallScreen ? 12 : 16),
-          Container(
-            padding: EdgeInsets.all(isSmallScreen ? 10 : 12),
-            decoration: BoxDecoration(
-              color: isCorrect ? Colors.green[50]! : Colors.red[50]!,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: isCorrect ? Colors.green : Colors.red),
-            ),
-            child: Text(
-              isCorrect ? 'Correct! Well done!' : 'Incorrect. The correct answer is: $correctAnswer',
-              style: TextStyle(color: isCorrect ? Colors.green[800]! : Colors.red[800]!, fontWeight: FontWeight.bold, fontSize: isSmallScreen ? 14 : 16),
-            ),
-          ),
-        ],
-      ],
-    );
+  if (_quizQuestions.isEmpty) {
+    return Center(child: Text('No quiz questions available.', style: TextStyle(fontSize: isSmallScreen ? 14 : 16, color: Colors.grey)));
   }
+
+  final q = _quizQuestions[_quizIndex];
+  final correctAnswer = q['correct'] as String;
+  final isCorrect = _selectedAnswer == correctAnswer;
+
+  return ListView( 
+    shrinkWrap: true,
+    physics: NeverScrollableScrollPhysics(),
+    children: [
+      _buildQuizHeader(),
+      _buildQuestionCard(q),
+      SizedBox(height: isSmallScreen ? 12 : 16),
+      _buildAnswerOptions(q),
+      if (_showAnswerFeedback) ...[
+        SizedBox(height: isSmallScreen ? 12 : 16),
+        Container(
+          padding: EdgeInsets.all(isSmallScreen ? 10 : 12),
+          decoration: BoxDecoration(
+            color: isCorrect ? Colors.green[50]! : Colors.red[50]!,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: isCorrect ? Colors.green : Colors.red),
+          ),
+          child: Text(
+            isCorrect ? 'Correct! Well done!' : 'Incorrect. The correct answer is: $correctAnswer',
+            style: TextStyle(color: isCorrect ? Colors.green[800]! : Colors.red[800]!, fontWeight: FontWeight.bold, fontSize: isSmallScreen ? 14 : 16),
+          ),
+        ),
+      ],
+    ],
+  );
+}
 
   Widget _buildQuizStats() {
     final isSmallScreen = MediaQuery.of(context).size.width < 600;

@@ -12,7 +12,7 @@ class CollabRoomTabs extends StatefulWidget {
   final String menteeId;
   final String mentorId;
   final bool isMentor;
-  final String sessionId; // ✅ ADDED: Critical for live_sessions updates
+  final String sessionId;
 
   const CollabRoomTabs({
     super.key,
@@ -21,7 +21,7 @@ class CollabRoomTabs extends StatefulWidget {
     required this.menteeId,
     required this.mentorId,
     required this.isMentor,
-    required this.sessionId, // ✅ ADDED
+    required this.sessionId,
   });
 
   @override
@@ -41,15 +41,30 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
   bool _isInitializing = true;
   StreamSubscription<List<Map<String, dynamic>>>? _subscriptionListener;
 
-  // For mentor invitation dialog
   final TextEditingController _mentorUsernameController = TextEditingController();
   bool _isInvitingMentor = false;
 
-  // Responsive layout detection
+  // ✅ ENHANCED: Better responsive detection
   bool get isSmallScreen {
     final mediaQuery = MediaQuery.of(context);
     return mediaQuery.size.width < 600;
   }
+
+  bool get isVerySmallScreen {
+    final mediaQuery = MediaQuery.of(context);
+    return mediaQuery.size.width < 400;
+  }
+
+  bool get isTablet {
+    final mediaQuery = MediaQuery.of(context);
+    return mediaQuery.size.width >= 600 && mediaQuery.size.width < 1200;
+  }
+
+  // ✅ ENHANCED: Dynamic font sizes for mobile
+  double get titleFontSize => isVerySmallScreen ? 14 : (isSmallScreen ? 16 : (isTablet ? 18 : 20));
+  double get bodyFontSize => isVerySmallScreen ? 12 : (isSmallScreen ? 14 : 16);
+  double get iconSize => isVerySmallScreen ? 18 : (isSmallScreen ? 20 : 24);
+  double get buttonPadding => isVerySmallScreen ? 8 : (isSmallScreen ? 12 : 16);
 
   @override
   void initState() {
@@ -66,7 +81,6 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     super.dispose();
   }
 
-  // FIXED: UUID validation helper
   bool _isValidUUID(String? uuid) {
     if (uuid == null || uuid.isEmpty) return false;
     final uuidRegex = RegExp(
@@ -76,92 +90,92 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     return uuidRegex.hasMatch(uuid);
   }
 
-  // ✅ IMPROVED: Better initialization using existing session
-Future<void> _initUserAndListen() async {
-  currentUserId = supabase.auth.currentUser?.id;
+  // ✅ ENHANCED: Better initialization with mobile optimization
+  Future<void> _initUserAndListen() async {
+    currentUserId = supabase.auth.currentUser?.id;
+    liveSessionId = widget.sessionId;
 
-  // ✅ USE THE PROVIDED SESSION ID FROM MENTOR INVITES
-  liveSessionId = widget.sessionId;
-
-  // FIXED: Better validation for roomId
-  if (widget.roomId.isEmpty || !_isValidUUID(widget.roomId)) {
-    debugPrint("❌ Error: roomId is empty or invalid UUID: ${widget.roomId}");
-    if (mounted) {
-      setState(() => _isInitializing = false);
-    }
-    return;
-  }
-
-  // ✅ ADDED: Validate sessionId before proceeding
-  if (liveSessionId == null || liveSessionId!.isEmpty) {
-    debugPrint("❌ Error: sessionId is null or empty");
-    if (mounted) {
-      setState(() => _isInitializing = false);
-    }
-    return;
-  }
-
-  try {
-    debugPrint("🟡 Initializing room: ${widget.roomId}, session: $liveSessionId");
-
-    // ✅ CHECK IF SESSION EXISTS AND GET LATEST DATA
-    final session = await supabase
-        .from('live_sessions')
-        .select()
-        .eq('id', liveSessionId!)
-        .maybeSingle();
-
-    if (session != null) {
-      debugPrint("✅ Found existing live session");
-      mentorId = session['mentor_id'] as String?;
-      currentMenteeId = session['mentee_id'] as String?;
-      
-      // ✅ ENSURE CURRENT USER IS IN ROOM_MEMBERS
-      await _ensureUserInRoom();
-    } else {
-      debugPrint("❌ Session not found: $liveSessionId");
+    // ✅ IMPROVED: Better validation
+    if (widget.roomId.isEmpty || !_isValidUUID(widget.roomId)) {
+      debugPrint("❌ Error: roomId is empty or invalid UUID: ${widget.roomId}");
       if (mounted) {
         setState(() => _isInitializing = false);
       }
       return;
     }
 
-    await _checkIfViewer();
+    if (liveSessionId == null || liveSessionId!.isEmpty) {
+      debugPrint("❌ Error: sessionId is null or empty");
+      if (mounted) {
+        setState(() => _isInitializing = false);
+      }
+      return;
+    }
 
-    // ✅ FIXED: Real-time updates with null safety
-    _subscriptionListener = supabase
-        .from('live_sessions')
-        .stream(primaryKey: ['id'])
-        .eq('id', liveSessionId!) // ✅ FIX: Add ! to assert not null
-        .listen(
-      (payload) {
-        if (payload.isNotEmpty) {
-          final data = payload.first;
-          debugPrint("🔄 Live session update - mentor: ${data['mentor_id']}");
-          if (mounted) {
-            setState(() {
-              mentorId = data['mentor_id'] as String?;
-              currentMenteeId = data['mentee_id'] as String?;
+    try {
+      debugPrint("🟡 Initializing room: ${widget.roomId}, session: $liveSessionId");
+
+      final session = await supabase
+          .from('live_sessions')
+          .select()
+          .eq('id', liveSessionId!)
+          .maybeSingle()
+          .timeout(const Duration(seconds: 10)); // ✅ ADDED: Timeout for mobile
+
+      if (session != null) {
+        debugPrint("✅ Found existing live session");
+        mentorId = session['mentor_id'] as String?;
+        currentMenteeId = session['mentee_id'] as String?;
+        
+        await _ensureUserInRoom();
+      } else {
+        debugPrint("❌ Session not found: $liveSessionId");
+        if (mounted) {
+          setState(() => _isInitializing = false);
+        }
+        return;
+      }
+
+      await _checkIfViewer();
+
+      // ✅ ENHANCED: Better real-time subscription with mobile optimization
+      _subscriptionListener = supabase
+          .from('live_sessions')
+          .stream(primaryKey: ['id'])
+          .eq('id', liveSessionId!)
+          .listen(
+        (payload) {
+          if (payload.isNotEmpty && mounted) {
+            final data = payload.first;
+            debugPrint("🔄 Live session update - mentor: ${data['mentor_id']}");
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                setState(() {
+                  mentorId = data['mentor_id'] as String?;
+                  currentMenteeId = data['mentee_id'] as String?;
+                });
+              }
             });
           }
-        }
-      },
-      onError: (error) {
-        debugPrint("❌ Live session stream error: $error");
-      },
-      cancelOnError: false,
-    );
+        },
+        onError: (error) {
+          debugPrint("❌ Live session stream error: $error");
+        },
+        cancelOnError: true,
+      );
 
-  } catch (e, st) {
-    debugPrint("❌ Error in _initUserAndListen: $e\n$st");
-  } finally {
-    if (mounted) {
-      setState(() => _isInitializing = false);
+    } catch (e, st) {
+      debugPrint("❌ Error in _initUserAndListen: $e\n$st");
+      if (mounted) {
+        _showSnack('Connection error. Please check your internet.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isInitializing = false);
+      }
     }
   }
-}
 
-  // ✅ NEW: Ensure user is in room_members
   Future<void> _ensureUserInRoom() async {
     if (currentUserId == null) return;
 
@@ -171,7 +185,8 @@ Future<void> _initUserAndListen() async {
           .select('id')
           .eq('room_id', widget.roomId)
           .eq('user_id', currentUserId!)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 5));
 
       if (existing == null) {
         debugPrint("👤 Adding user to room_members...");
@@ -205,7 +220,8 @@ Future<void> _initUserAndListen() async {
       final response = await supabase
           .from('room_members')
           .select('user_id')
-          .eq('room_id', widget.roomId);
+          .eq('room_id', widget.roomId)
+          .timeout(const Duration(seconds: 5));
 
       final members = List<Map<String, dynamic>>.from(response);
       final isMember = members.any((m) => m['user_id'] == currentUserId);
@@ -217,9 +233,7 @@ Future<void> _initUserAndListen() async {
     }
   }
 
-  /// =============================
-  /// FIXED: Invite Mentor by Username
-  /// =============================
+  // ✅ ENHANCED: Mobile-optimized mentor invitation
   Future<void> inviteMentorByUsername(String username) async {
     if (currentUserId == null || !_amMentee) {
       _showSnack('Only the room creator (mentee) can invite a mentor.');
@@ -229,12 +243,12 @@ Future<void> _initUserAndListen() async {
     try {
       debugPrint('🔍 Searching for mentor with username: $username');
 
-      // FIXED: Use profiles_new table with proper error handling
       final userResp = await supabase
           .from('profiles_new')
           .select('id, username, role')
           .eq('username', username.trim())
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 8));
 
       if (userResp == null) {
         _showSnack('Mentor not found. Please check the username.');
@@ -249,40 +263,33 @@ Future<void> _initUserAndListen() async {
         return;
       }
 
-      // Check if the user is actually a mentor
       if (userRole != 'mentor') {
         _showSnack('This user is not a mentor. Only mentors can be invited.');
         return;
       }
 
-      // Check if mentor is trying to invite themselves
       if (targetMentorId == currentUserId) {
         _showSnack('You cannot invite yourself as a mentor.');
         return;
       }
 
       debugPrint('✅ Found mentor: $targetMentorId, role: $userRole');
-
-      // Proceed with mentor invitation
       await _inviteMentorById(targetMentorId);
 
     } catch (e, stack) {
-      debugPrint('❌ Error inviting mentor by username: $e');
-      debugPrint('Stack trace: $stack');
-      _showSnack('Failed to invite mentor. Please try again.');
+      debugPrint('❌ Error inviting mentor by username: $e\n$stack');
+      _showSnack('Failed to invite mentor. Please check your connection.');
     }
   }
 
-  /// =============================
-  /// FIXED: Invite Mentor by User ID
-  /// =============================
   Future<void> _inviteMentorById(String targetMentorId) async {
     try {
       final session = await supabase
           .from('live_sessions')
           .select()
           .eq('room_id', widget.roomId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 8));
 
       if (session == null) {
         _showSnack('No live session found.');
@@ -297,7 +304,6 @@ Future<void> _initUserAndListen() async {
         return;
       }
 
-      // FIXED: Update live session with proper timestamp
       await supabase.from('live_sessions').update({
         'mentor_id': targetMentorId,
         'is_live': true,
@@ -305,9 +311,8 @@ Future<void> _initUserAndListen() async {
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('room_id', widget.roomId);
 
-      _showSnack('Mentor invited successfully! Session is now live.');
+      _showSnack('🎉 Mentor invited successfully! Session is now live.');
       
-      // Refresh the state
       if (mounted) {
         setState(() {
           mentorId = targetMentorId;
@@ -320,9 +325,7 @@ Future<void> _initUserAndListen() async {
     }
   }
 
-  /// =============================
-  /// Show Mentor Invitation Dialog
-  /// =============================
+  // ✅ ENHANCED: Mobile-optimized dialog
   Future<void> _showInviteMentorDialog() async {
     if (!_amMentee) {
       _showSnack('Only mentees can invite mentors.');
@@ -335,32 +338,41 @@ Future<void> _initUserAndListen() async {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text('Invite Mentor'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Enter the username of the mentor you want to invite:',
-                    style: TextStyle(
-                      fontSize: isSmallScreen ? 14 : 16,
-                      color: Colors.grey[700],
+              title: Text(
+                'Invite Mentor',
+                style: TextStyle(fontSize: titleFontSize),
+              ),
+              content: SizedBox(
+                width: double.maxFinite, // ✅ FIXED: Better mobile width
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Enter the username of the mentor you want to invite:',
+                      style: TextStyle(
+                        fontSize: bodyFontSize,
+                        color: Colors.grey[700],
+                      ),
+                      textAlign: TextAlign.center,
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _mentorUsernameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Mentor Username',
-                      hintText: 'Enter username...',
-                      border: OutlineInputBorder(),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _mentorUsernameController,
+                      decoration: InputDecoration(
+                        labelText: 'Mentor Username',
+                        hintText: 'Enter username...',
+                        border: const OutlineInputBorder(),
+                        contentPadding: EdgeInsets.all(buttonPadding),
+                      ),
+                      style: TextStyle(fontSize: bodyFontSize),
+                      onSubmitted: (_) {
+                        if (!_isInvitingMentor) {
+                          _inviteMentorFromDialog(setDialogState);
+                        }
+                      },
                     ),
-                    onSubmitted: (_) {
-                      if (!_isInvitingMentor) {
-                        _inviteMentorFromDialog(setDialogState);
-                      }
-                    },
-                  ),
-                ],
+                  ],
+                ),
               ),
               actions: [
                 TextButton(
@@ -368,8 +380,12 @@ Future<void> _initUserAndListen() async {
                       ? null
                       : () {
                           Navigator.of(context).pop();
+                          _mentorUsernameController.clear();
                         },
-                  child: const Text('Cancel'),
+                  child: Text(
+                    'Cancel',
+                    style: TextStyle(fontSize: bodyFontSize),
+                  ),
                 ),
                 ElevatedButton(
                   onPressed: _isInvitingMentor
@@ -388,7 +404,10 @@ Future<void> _initUserAndListen() async {
                             ),
                           ),
                         )
-                      : const Text('Invite'),
+                      : Text(
+                          'Invite',
+                          style: TextStyle(fontSize: bodyFontSize),
+                        ),
                 ),
               ],
             );
@@ -427,14 +446,12 @@ Future<void> _initUserAndListen() async {
     if (currentUserId == null) return;
 
     try {
-      // Remove current user from room_members
       await supabase
           .from('room_members')
           .delete()
           .eq('room_id', widget.roomId)
           .eq('user_id', currentUserId!);
 
-      // Fetch remaining members
       final remainingResp = await supabase
           .from('room_members')
           .select('user_id')
@@ -445,26 +462,22 @@ Future<void> _initUserAndListen() async {
           .toList();
 
       if (remaining.isNotEmpty) {
-        // Pick a random member as the new creator
         final rnd = Random();
         final choice = remaining[rnd.nextInt(remaining.length)];
         final newCreatorId = choice['user_id'] as String;
 
-        // Update rooms.creator_id
         await supabase
             .from('rooms')
             .update({'creator_id': newCreatorId})
             .eq('id', widget.roomId);
 
-        // Update live_sessions. Mentee changes to new creator
         await supabase.from('live_sessions').update({
           'mentee_id': newCreatorId,
           'is_live': false
         }).eq('room_id', widget.roomId);
 
-        _showSnack('You were removed. Room ownership transferred.');
+        _showSnack('👋 You were removed. Room ownership transferred.');
       } else {
-        // No members left — delete everything
         await supabase
             .from('live_sessions')
             .delete()
@@ -475,10 +488,9 @@ Future<void> _initUserAndListen() async {
             .eq('room_id', widget.roomId);
         await supabase.from('rooms').delete().eq('id', widget.roomId);
 
-        _showSnack('You were removed. Room was deleted.');
+        _showSnack('👋 You were removed. Room was deleted.');
       }
 
-      // Refresh local state
       await _initUserAndListen();
     } catch (e) {
       debugPrint('❌ Error in _autoKickCreator: $e');
@@ -495,7 +507,7 @@ Future<void> _initUserAndListen() async {
         'last_editor': currentUserId
       }).eq('room_id', widget.roomId);
 
-      _showSnack('You joined as mentor.');
+      _showSnack('🎯 You joined as mentor.');
       await _initUserAndListen();
     } catch (e) {
       debugPrint('❌ Error accepting invite as mentor: $e');
@@ -510,7 +522,7 @@ Future<void> _initUserAndListen() async {
         'mentor_id': null,
         'is_live': false
       }).eq('room_id', widget.roomId);
-      _showSnack('You left the mentoring session.');
+      _showSnack('👋 You left the mentoring session.');
       await _initUserAndListen();
     } catch (e) {
       debugPrint('❌ Error leaving as mentor: $e');
@@ -521,83 +533,73 @@ Future<void> _initUserAndListen() async {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(text),
+        content: Text(
+          text,
+          style: TextStyle(fontSize: bodyFontSize),
+        ),
         behavior: SnackBarBehavior.floating,
         margin: EdgeInsets.all(isSmallScreen ? 8 : 16),
+        duration: const Duration(seconds: 3),
       ),
     );
   }
 
+  // ✅ ENHANCED: Mobile-optimized role indicator
   Widget _buildRoleIndicator() {
+    String roleText;
+    Color roleColor;
+    String emoji;
+
     if (_amMentor) {
-      return Container(
-        padding: EdgeInsets.symmetric(
-          horizontal: isSmallScreen ? 8 : 12,
-          vertical: isSmallScreen ? 4 : 6,
-        ),
-        decoration: BoxDecoration(
-          color: Colors.green.withAlpha(25),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.green),
-        ),
-        child: Text(
-          'Mentor',
-          style: TextStyle(
-            color: Colors.green,
-            fontSize: isSmallScreen ? 12 : 14,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      );
+      roleText = 'Mentor';
+      roleColor = Colors.green;
+      emoji = '👨‍🏫';
     } else if (_amMentee) {
-      return Container(
-        padding: EdgeInsets.symmetric(
-          horizontal: isSmallScreen ? 8 : 12,
-          vertical: isSmallScreen ? 4 : 6,
-        ),
-        decoration: BoxDecoration(
-          color: Colors.blue.withAlpha(25),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.blue),
-        ),
-        child: Text(
-          'Mentee',
-          style: TextStyle(
-            color: Colors.blue,
-            fontSize: isSmallScreen ? 12 : 14,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      );
+      roleText = 'Mentee';
+      roleColor = Colors.blue;
+      emoji = '👨‍🎓';
     } else {
-      return Container(
-        padding: EdgeInsets.symmetric(
-          horizontal: isSmallScreen ? 8 : 12,
-          vertical: isSmallScreen ? 4 : 6,
-        ),
-        decoration: BoxDecoration(
-          color: Colors.grey.withAlpha(25),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.grey),
-        ),
-        child: Text(
-          'Viewer',
-          style: TextStyle(
-            color: Colors.grey,
-            fontSize: isSmallScreen ? 12 : 14,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      );
+      roleText = 'Viewer';
+      roleColor = Colors.grey;
+      emoji = '👀';
     }
+
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: isVerySmallScreen ? 6 : 8,
+        vertical: isVerySmallScreen ? 3 : 4,
+      ),
+      decoration: BoxDecoration(
+        color: roleColor.withAlpha(30),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: roleColor),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!isVerySmallScreen) Text(emoji),
+          if (!isVerySmallScreen) SizedBox(width: 4),
+          Text(
+            roleText,
+            style: TextStyle(
+              color: roleColor,
+              fontSize: isVerySmallScreen ? 10 : 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
+  // ✅ ENHANCED: Mobile-optimized mentor invite button
   Widget _buildMentorInviteButton() {
     if (_amMentee && mentorId == null) {
       return IconButton(
         icon: Icon(
-          Icons.person_add,
-          size: isSmallScreen ? 20 : 24,
+          Icons.person_add_alt_rounded,
+          size: iconSize,
+          color: Colors.white,
         ),
         tooltip: 'Invite Mentor',
         onPressed: _showInviteMentorDialog,
@@ -606,110 +608,145 @@ Future<void> _initUserAndListen() async {
     return const SizedBox.shrink();
   }
 
-  // FIXED: Loading state
+  // ✅ ENHANCED: Mobile-optimized loading state
   Widget _buildLoadingState() {
-    return const Center(
+    return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          CircularProgressIndicator(),
+          CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(Colors.indigo),
+          ),
           SizedBox(height: 16),
-          Text('Loading collaboration room...'),
+          Text(
+            'Loading collaboration room...',
+            style: TextStyle(
+              fontSize: bodyFontSize,
+              color: Colors.grey[600],
+            ),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'Please wait',
+            style: TextStyle(
+              fontSize: isSmallScreen ? 12 : 14,
+              color: Colors.grey[500],
+            ),
+          ),
         ],
       ),
     );
   }
 
+  // ✅ ENHANCED: Mobile-optimized app bar
+  PreferredSizeWidget _buildAppBar() {
+    return AppBar(
+      backgroundColor: Colors.indigo,
+      elevation: 2,
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              widget.roomName,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: titleFontSize,
+                fontWeight: FontWeight.w500,
+              ),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
+          ),
+          SizedBox(width: isVerySmallScreen ? 4 : 8),
+          _buildRoleIndicator(),
+        ],
+      ),
+      bottom: PreferredSize(
+        preferredSize: Size.fromHeight(isSmallScreen ? 40 : 48),
+        child: TabBar(
+          controller: _tabController,
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.white70,
+          indicatorColor: Colors.white,
+          indicatorWeight: 3,
+          labelStyle: TextStyle(
+            fontSize: isVerySmallScreen ? 12 : 14,
+            fontWeight: FontWeight.w500,
+          ),
+          unselectedLabelStyle: TextStyle(
+            fontSize: isVerySmallScreen ? 12 : 14,
+          ),
+          tabs: [
+            Tab(
+              icon: Icon(
+                Icons.chat_bubble_outline,
+                size: isVerySmallScreen ? 18 : 20,
+              ),
+              text: isVerySmallScreen ? 'Chat' : 'Chat Room',
+            ),
+            Tab(
+              icon: Icon(
+                Icons.code,
+                size: isVerySmallScreen ? 18 : 20,
+              ),
+              text: isVerySmallScreen ? 'Code' : 'Code Editor',
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        _buildMentorInviteButton(),
+        if (_amMentor)
+          IconButton(
+            icon: Icon(
+              Icons.logout,
+              size: iconSize,
+              color: Colors.white,
+            ),
+            tooltip: 'Leave as Mentor',
+            onPressed: mentorLeave,
+          ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    // FIXED: Show loading state while initializing
     if (_isInitializing) {
       return Scaffold(
         appBar: AppBar(
           backgroundColor: Colors.indigo,
-          title: Text(widget.roomName),
+          title: Text(
+            widget.roomName,
+            style: TextStyle(fontSize: titleFontSize),
+          ),
         ),
         body: _buildLoadingState(),
       );
     }
 
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.indigo,
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                widget.roomName,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w500,
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const SizedBox(width: 8),
-            _buildRoleIndicator(),
-          ],
-        ),
-        bottom: TabBar(
+      appBar: _buildAppBar(),
+      body: SafeArea(
+        bottom: false, // ✅ IMPORTANT: Better mobile safe area handling
+        child: TabBarView(
           controller: _tabController,
-          labelColor: Colors.white,
-          unselectedLabelColor: Colors.white70,
-          indicatorColor: Colors.white,
-          labelStyle: TextStyle(
-            fontSize: isSmallScreen ? 14 : 16,
-            fontWeight: FontWeight.w500,
-          ),
-          unselectedLabelStyle: TextStyle(
-            fontSize: isSmallScreen ? 14 : 16,
-          ),
-          tabs: [
-            Tab(
-              icon: Icon(
-                Icons.chat,
-                size: isSmallScreen ? 20 : 24,
-              ),
-              text: 'Chat',
+          children: [
+            // Chat Tab
+            CollabRoomScreen(
+              roomId: widget.roomId,
+              roomName: widget.roomName,
+              isMentor: widget.isMentor,
             ),
-            Tab(
-              icon: Icon(
-                Icons.code,
-                size: isSmallScreen ? 20 : 24,
-              ),
-              text: 'Code Review',
+            // Code Editor Tab
+            CollabCodeEditorScreen(
+              roomId: widget.roomId,
+              isReadOnly: !canEdit,
+              isMentor: _amMentor,
+              liveSessionId: liveSessionId ?? widget.sessionId,
             ),
           ],
         ),
-        actions: [
-          _buildMentorInviteButton(),
-          if (_amMentor)
-            IconButton(
-              icon: Icon(
-                Icons.exit_to_app,
-                size: isSmallScreen ? 20 : 24,
-              ),
-              tooltip: 'Leave as Mentor',
-              onPressed: mentorLeave,
-            ),
-        ],
-      ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          CollabRoomScreen(
-            roomId: widget.roomId,
-            roomName: widget.roomName,
-            isMentor: widget.isMentor,
-          ),
-          CollabCodeEditorScreen(
-            roomId: widget.roomId,
-            isReadOnly: !canEdit,
-            isMentor: _amMentor,
-            liveSessionId: liveSessionId ?? widget.sessionId, // ✅ CRITICAL: Use the session ID
-          ),
-        ],
       ),
     );
   }

@@ -49,7 +49,7 @@ class MentorFriendService {
           .or('and(mentor_id.eq.$userId,friend_id.eq.$senderId),and(mentor_id.eq.$senderId,friend_id.eq.$userId)');
 
       if ((existingFriendship as List).isNotEmpty) {
-        print('✅ Friendship already exists');
+        ('✅ Friendship already exists');
         return;
       }
 
@@ -85,9 +85,9 @@ class MentorFriendService {
         'status': 'accepted',
       }).select();
 
-      print('✅ Friendship created: $result');
+      ('✅ Friendship created: $result');
     } catch (e) {
-      print('❌ Error accepting request: $e');
+      ('❌ Error accepting request: $e');
       rethrow;
     }
   }
@@ -118,11 +118,11 @@ class MentorFriendService {
   Future<List<Map<String, dynamic>>> getFriends() async {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) {
-      print('❌ No user ID');
+      ('❌ No user ID');
       return [];
     }
 
-    print('🔍 Fetching friends for user: $userId');
+    ('🔍 Fetching friends for user: $userId');
 
     final res = await supabase
         .from('mentor_friends')
@@ -137,8 +137,8 @@ class MentorFriendService {
         .or('mentor_id.eq.$userId,friend_id.eq.$userId')
         .eq('status', 'accepted');
 
-    print('📦 Raw response: $res');
-    print('📊 Friend count: ${(res as List).length}');
+    ('📦 Raw response: $res');
+    ('📊 Friend count: ${(res as List).length}');
 
     final List<Map<String, dynamic>> friends = [];
 
@@ -147,7 +147,7 @@ class MentorFriendService {
       final friend = row['friend'] as Map<String, dynamic>?;
 
       if (mentor == null || friend == null) {
-        print('⚠️ Skipping row - null mentor or friend: $row');
+        ('⚠️ Skipping row - null mentor or friend: $row');
         continue;
       }
 
@@ -164,7 +164,7 @@ class MentorFriendService {
       });
     }
 
-    print('✅ Processed friends: ${friends.length}');
+    ('✅ Processed friends: ${friends.length}');
     return friends;
   }
 
