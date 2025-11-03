@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:codexhub01/parts/log_in.dart';
 import 'package:codexhub01/services/authservice.dart';
+import 'package:codexhub01/parts/mentor_qualification'; // IMPORT QUALIFICATION
 
 class SignUp extends StatefulWidget {
   const SignUp({super.key});
@@ -39,84 +40,116 @@ class _SignUpState extends State<SignUp> {
   }
 
   Future<void> _signUp() async {
-  if (!_formKey.currentState!.validate()) return;
+    if (!_formKey.currentState!.validate()) return;
 
-  _safeSetState(() => _isLoading = true);
+    _safeSetState(() => _isLoading = true);
 
-  try {
-    final username = _usernameController.text.trim();
-    final email = _emailController.text.trim();
-    final password = _passwordController.text.trim();
-    final role = _selectedRole?.toLowerCase();
+    try {
+      final username = _usernameController.text.trim();
+      final email = _emailController.text.trim();
+      final password = _passwordController.text.trim();
+      final role = _selectedRole?.toLowerCase();
 
-    if (role == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("❌ Please select a role"), backgroundColor: Colors.red),
-      );
-      return;
-    }
+      if (role == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("❌ Please select a role"), backgroundColor: Colors.red),
+        );
+        return;
+      }
 
-    final result = await _authService.signUp(
-      email: email,
-      password: password,
-      username: username,
-      role: role,
-    );
-
-    debugPrint('📝 AuthService result: $result');
-
-    if (!mounted) return;
-
-    if (result['success'] == true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("✅ ${result['message']}"),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 5),
-        ),
+      final result = await _authService.signUp(
+        email: email,
+        password: password,
+        username: username,
+        role: role,
       );
 
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const SignIn()),
-      );
-    } else if (result['requiresEmailVerification'] == true) {
-      // Email verification required
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("📧 Check your email! Verification link sent. You'll also need admin approval."),
-          backgroundColor: Colors.orange,
-          duration: Duration(seconds: 6),
-        ),
-      );
+      debugPrint('📝 AuthService result: $result');
+      debugPrint('🎭 Selected role: $role');
+
+      if (!mounted) return;
+
+      if (result['success'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("✅ ${result['message']}"),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+
+        // ✅✅✅ FIXED: CHECK IF MENTOR OR STUDENT
+        if (role == 'mentor') {
+          debugPrint('🚀 Redirecting mentor to qualification page...');
+          // MENTOR -> QUALIFICATION PAGE
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => MentorQualification(
+                username: username,
+                email: email,
+              ),
+            ),
+          );
+        } else {
+          debugPrint('🎓 Redirecting student to login page...');
+          // STUDENT -> LOGIN PAGE
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const SignIn()),
+          );
+        }
+
+      } else if (result['requiresEmailVerification'] == true) {
+        // Email verification required
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("📧 Check your email! Verification link sent. You'll also need admin approval."),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 6),
+          ),
+        );
+        
+        // ✅✅✅ FIXED: CHECK IF MENTOR OR STUDENT FOR EMAIL VERIFICATION CASE TOO
+        if (role == 'mentor') {
+          debugPrint('🚀 Redirecting mentor to qualification page (email verification required)...');
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => MentorQualification(
+                username: username,
+                email: email,
+              ),
+            ),
+          );
+        } else {
+          debugPrint('🎓 Redirecting student to login page (email verification required)...');
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const SignIn()),
+          );
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("❌ ${result['error']}"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e, st) {
+      debugPrint('💥 Unexpected exception during signup: $e\n$st');
       
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const SignIn()),
-      );
-    } else {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("❌ ${result['error']}"),
-          backgroundColor: Colors.red,
-        ),
+        SnackBar(content: Text("❌ Unexpected error: $e"), backgroundColor: Colors.red),
       );
+    } finally {
+      _safeSetState(() => _isLoading = false);
     }
-  } catch (e, st) {
-    debugPrint('💥 Unexpected exception during signup: $e\n$st');
-    
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("❌ Unexpected error: $e"), backgroundColor: Colors.red),
-    );
-  } finally {
-    _safeSetState(() => _isLoading = false);
   }
-}
 
-
-
-  // Validators - FIXED
+  // ... (REST OF YOUR CODE REMAINS THE SAME - validators and UI)
   String? _validateUsername(String? value) {
     if (value == null || value.isEmpty) return 'Please enter a username';
     return value.length >= 3 ? null : 'Username must be at least 3 characters';
@@ -142,8 +175,6 @@ class _SignUpState extends State<SignUp> {
           ? 'Please select a role'
           : (value != 'student' && value != 'mentor' ? 'Invalid role selected' : null);
 
-
-  // UI - FIXED dropdown values
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -191,7 +222,7 @@ class _SignUpState extends State<SignUp> {
                     initialValue: _selectedRole,
                     onChanged: _isLoading ? null : (v) => _safeSetState(() => _selectedRole = v),
                     items: const [
-                      DropdownMenuItem(value: "student", child: Text("Student")), // FIXED: changed "user" to "student"
+                      DropdownMenuItem(value: "student", child: Text("Student")),
                       DropdownMenuItem(value: "mentor", child: Text("Mentor")),
                     ],
                     decoration: const InputDecoration(labelText: "Select Role"),

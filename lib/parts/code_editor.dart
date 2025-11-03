@@ -8,7 +8,6 @@ import 'package:highlight/languages/cs.dart';
 import 'package:highlight/languages/python.dart';
 import 'package:flutter_highlight/themes/github.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:highlight/highlight.dart';
 import 'package:http/http.dart' as http;
 import 'dart:math';
@@ -33,6 +32,7 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
   late CodeController _codeController;
   bool _isDarkMode = false;
   bool _isLoading = true;
+  bool _showFileSelection = true; // NEW: Controls whether to show file selection screen
   String _selectedLanguage = 'python';
   String _output = '';
   late TabController _tabController;
@@ -42,20 +42,18 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
   String? _currentRoomDescription;
   bool _isExecuting = false;
 
-  // Use consistent language keys - VB.NET REMOVED
+  // Use consistent language keys
   final Map<String, Mode> _languages = {
     'python': python,
     'java': java,
     'csharp': cs,
-    // 'vb': vbscript, // REMOVED VB.NET
   };
 
-  // Map our language keys to Piston API language names and versions - VB.NET REMOVED
+  // Map our language keys to Piston API language names and versions
   final Map<String, Map<String, String>> _pistonLanguages = {
     'python': {'language': 'python', 'version': '3.10.0'},
     'java': {'language': 'java', 'version': '15.0.2'},
     'csharp': {'language': 'csharp', 'version': '6.12.0'},
-    // 'vb': {'language': 'vb', 'version': '1.4.0'}, // REMOVED VB.NET
   };
 
   @override
@@ -79,71 +77,132 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
       language: _languages[_selectedLanguage] ?? python,
     );
 
-    // Try loading from cache first for offline capability
-    await _loadFromCache();
-
-    // Then try loading from Supabase (will fail gracefully if offline)
-    try {
-      await _loadCurrentRoom();
-    } catch (e) {
-      debugPrint('Offline mode: Could not load from Supabase');
-    }
-
     if (mounted) {
       setState(() => _isLoading = false);
     }
   }
 
-  Future<void> _loadCurrentRoom() async {
+ void _startNewFile() async {
+  // First, prompt for file name
+  final TextEditingController titleController = TextEditingController(text: 'Untitled');
+  final TextEditingController descriptionController = TextEditingController();
+
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Create New File'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: titleController,
+            decoration: const InputDecoration(
+              labelText: 'File Name',
+              hintText: 'Enter file name',
+            ),
+            autofocus: true,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            if (titleController.text.trim().isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Please enter a file name')),
+              );
+              return;
+            }
+            Navigator.pop(context, true);
+          },
+          child: const Text('Create'),
+        ),
+      ],
+    ),
+  );
+
+  if (result == true && mounted) {
+    setState(() {
+      _showFileSelection = false;
+      _currentRoomTitle = titleController.text.trim();
+      _currentRoomDescription = descriptionController.text.trim().isEmpty 
+          ? null 
+          : descriptionController.text.trim();
+      _codeController.text = '';
+    });
+    
+    // Create the room in background with the provided name
+    await _createInitialRoom();
+  }
+}
+
+  void _openExistingFile(Map<String, dynamic> room) {
+    if (mounted) {
+      setState(() {
+        _showFileSelection = false;
+        _codeController.text = room['code'] ?? '';
+        _selectedLanguage = room['language'] ?? 'python';
+        _currentRoomTitle = room['title'] ?? 'Untitled';
+        _currentRoomDescription = room['description'];
+        _codeController.language = _languages[_selectedLanguage] ?? python;
+      });
+    }
+    _updateCurrentRoomContent(room);
+  }
+
+  Future<void> _updateCurrentRoomContent(Map<String, dynamic> room) async {
     try {
       final user = Supabase.instance.client.auth.currentUser;
-      final response = await Supabase.instance.client
-          .from('code_rooms')
-          .select('*')
-          .eq('room_id', widget.roomId)
-          .eq('user_id', user!.id)
-          .maybeSingle();
-
-      if (response != null) {
-        String savedLanguage = response['language'] ?? 'python';
-        // Normalize the language value
-        if (savedLanguage == 'c#') savedLanguage = 'csharp';
-        if (savedLanguage == 'C#') savedLanguage = 'csharp';
-
-        if (mounted) {
-          setState(() {
-            _codeController.text = response['code'] ?? '';
-            _selectedLanguage = savedLanguage;
-            _currentRoomTitle = response['title'] ?? 'Untitled';
-            _currentRoomDescription = response['description'];
-            _codeController.language = _languages[_selectedLanguage] ?? python;
-          });
-        }
-      } else {
-        // Create initial room if it doesn't exist
-        await _createInitialRoom();
+      if (user != null) {
+        var query = Supabase.instance.client.from('code_rooms').update({
+          'room_id': widget.roomId,
+          'code': room['code'],
+          'language': room['language'],
+          'title': room['title'],
+          'description': room['description'],
+          'updated_at': DateTime.now().toIso8601String(),
+          'user_id': user.id,
+        });
+        query = query.eq('room_id', widget.roomId);
+      query = query.eq('user_id', user.id);
+      
+      await query;
       }
     } catch (e) {
-      debugPrint('Error loading current room: $e');
+      debugPrint('Error updating current room: $e');
+      await _createInitialRoom();
+    }
+  }
+
+  // NEW: Go back to file selection
+  void _showFileSelectionScreen() {
+    if (mounted) {
+      setState(() {
+        _showFileSelection = true;
+      });
     }
   }
 
   Future<void> _createInitialRoom() async {
-    try {
-      final user = Supabase.instance.client.auth.currentUser;
-      await Supabase.instance.client.from('code_rooms').insert({
-        'room_id': widget.roomId,
-        'code': '',
-        'language': _selectedLanguage,
-        'title': 'Untitled',
-        'description': null,
-        'is_public': false,
-        'user_id': user?.id,
-      });
-    } catch (e) {
-      debugPrint('Error creating initial room: $e');
-    }
+  try {
+    final user = Supabase.instance.client.auth.currentUser;
+    await Supabase.instance.client.from('code_rooms').insert({
+      'room_id': widget.roomId,
+      'code': _codeController.text,
+      'language': _selectedLanguage,
+      'title': _currentRoomTitle, 
+      'description': _currentRoomDescription,
+      'is_public': false,
+      'user_id': user?.id,
+    });
+  } catch (e) {
+    debugPrint('Error creating initial room: $e');
   }
+}
 
   Future<void> _loadAllRooms() async {
     if (!mounted) return;
@@ -187,40 +246,45 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
   }
 
   Future<void> _saveCurrentRoom() async {
-    try {
-      // Always cache locally for offline access
-      await _cacheLocally();
+  // Check if code is empty or just whitespace
+  if (_codeController.text.trim().isEmpty) {
+    if (mounted) {
+      _showSnackBar('No code to save');
+    }
+    return;
+  }
 
-      final user = Supabase.instance.client.auth.currentUser;
-      if (user == null) {
-        if (mounted) {
-          _showSnackBar('Code cached locally (offline mode)');
-        }
-        return;
-      }
-
-      await Supabase.instance.client.from('code_rooms').upsert({
-        'room_id': widget.roomId,
-        'code': _codeController.text,
-        'language': _selectedLanguage,
-        'title': _currentRoomTitle,
-        'description': _currentRoomDescription,
-        'updated_at': DateTime.now().toIso8601String(),
-        'user_id': user.id,
-      });
-
+  try {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) {
       if (mounted) {
-        _showSnackBar('Code saved successfully!');
+        _showSnackBar('Please sign in to save files');
       }
+      return;
+    }
 
-      await _loadAllRooms();
-    } catch (e) {
-      debugPrint('Error saving code: $e');
-      if (mounted) {
-        _showSnackBar('Code cached locally (offline mode)');
-      }
+    await Supabase.instance.client.from('code_rooms').upsert({
+      'room_id': widget.roomId,
+      'code': _codeController.text,
+      'language': _selectedLanguage,
+      'title': _currentRoomTitle,
+      'description': _currentRoomDescription,
+      'updated_at': DateTime.now().toIso8601String(),
+      'user_id': user.id,
+    });
+
+    if (mounted) {
+      _showSnackBar('Code saved successfully!');
+    }
+
+    await _loadAllRooms();
+  } catch (e) {
+    debugPrint('Error saving code: $e');
+    if (mounted) {
+      _showSnackBar('Failed to save code');
     }
   }
+}
 
   // Helper method to show snackbars without storing context
   void _showSnackBar(String message) {
@@ -234,6 +298,14 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
   }
 
   Future<void> _saveAsNewRoom() async {
+
+    if (_codeController.text.trim().isEmpty) {
+    if (mounted) {
+      _showSnackBar('No code to save');
+    }
+    return;
+  }
+  
     final TextEditingController titleController = TextEditingController(
       text: _currentRoomTitle,
     );
@@ -302,7 +374,6 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
 
       await Supabase.instance.client.from('code_rooms').insert({
         'room_id': newRoomId,
-        'file_name': title,
         'description': description,
         'code': _codeController.text,
         'language': _selectedLanguage,
@@ -415,62 +486,9 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
     }
   }
 
-  Future<void> _loadRoom(Map<String, dynamic> room) async {
-    // Don't load the current room into itself
-    if (room['room_id'] == widget.roomId) {
-      if (mounted) {
-        _showSnackBar('This is the current file');
-      }
-      return;
-    }
+ 
 
-    if (mounted) {
-      setState(() {
-        _codeController.text = room['code'] ?? '';
-        _selectedLanguage = room['language'] ?? 'python';
-        _currentRoomTitle = room['title'] ?? 'Untitled';
-        _currentRoomDescription = room['description'];
-        _codeController.language = _languages[_selectedLanguage] ?? python;
-        _tabController.animateTo(0); // Switch to editor tab
-      });
-    }
 
-    // Update the current room with the loaded content
-    await Supabase.instance.client.from('code_rooms').upsert({
-      'room_id': widget.roomId,
-      'code': room['code'],
-      'language': room['language'],
-      'title': room['title'],
-      'description': room['description'],
-      'updated_at': DateTime.now().toIso8601String(),
-    });
-
-    if (mounted) {
-      _showSnackBar('Loaded: ${room['title']}');
-    }
-  }
-
-  // Add to your state class
-  final Future<SharedPreferences> _prefs = SharedPreferences.getInstance();
-
-  Future<void> _cacheLocally() async {
-    final SharedPreferences prefs = await _prefs;
-    await prefs.setString('cached_code', _codeController.text);
-    await prefs.setString('cached_language', _selectedLanguage);
-  }
-
-  Future<void> _loadFromCache() async {
-    final SharedPreferences prefs = await _prefs;
-    final cachedCode = prefs.getString('cached_code');
-    final cachedLang = prefs.getString('cached_language');
-    if (cachedCode != null && mounted) {
-      setState(() {
-        _codeController.text = cachedCode;
-        _selectedLanguage = cachedLang ?? 'python';
-        _codeController.language = _languages[_selectedLanguage] ?? python;
-      });
-    }
-  }
 
   Future<void> _deleteRoom(Map<String, dynamic> room) async {
     // Prevent deleting the current room
@@ -522,6 +540,7 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
     }
   }
 
+  // ENHANCED: Better offline execution with smart analysis
   Future<void> _runCode() async {
     if (_isExecuting) return;
     
@@ -534,18 +553,11 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
       });
     }
 
-    // Try online execution first
+    // First try online execution
     try {
       final pistonLang = _pistonLanguages[_selectedLanguage];
       if (pistonLang == null) {
-        if (mounted) {
-          setState(() {
-            _output =
-                '❌ Error: Language $_selectedLanguage is not supported for execution';
-            _isExecuting = false;
-          });
-        }
-        return;
+        throw Exception('Language $_selectedLanguage not supported');
       }
 
       final uri = Uri.parse('https://emkc.org/api/v2/piston/execute');
@@ -569,11 +581,11 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
         String outputText;
         
         if (runData['stderr']?.isNotEmpty == true) {
-          outputText = '❌ ERROR:\n${runData['stderr']}';
+          outputText = '🌐 ONLINE EXECUTION\n❌ ERROR:\n${runData['stderr']}';
         } else if (runData['stdout']?.isNotEmpty == true) {
-          outputText = '✅ OUTPUT:\n${runData['stdout']}';
+          outputText = '🌐 ONLINE EXECUTION\n✅ OUTPUT:\n${runData['stdout']}';
         } else {
-          outputText = '✅ Program executed successfully (no output)';
+          outputText = '🌐 ONLINE EXECUTION\n✅ Program executed successfully (no output)';
         }
 
         if (mounted) {
@@ -587,62 +599,37 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
         throw Exception('HTTP ${response.statusCode}');
       }
     } catch (e) {
-      // Online execution failed, fall back to offline simulation
+      // Online execution failed, use enhanced offline analysis
       debugPrint('Online execution failed: $e');
-      await _simulateOfflineExecution();
+      await _executeEnhancedOffline();
     }
   }
 
-  Future<void> _simulateOfflineExecution() async {
+  // NEW: Enhanced offline execution with better analysis
+  Future<void> _executeEnhancedOffline() async {
     final code = _codeController.text;
     final random = Random();
 
     // Simulate processing time
     await Future.delayed(Duration(milliseconds: 500 + random.nextInt(1000)));
 
-    String simulatedOutput;
+    String analyzedOutput;
 
-    // Analyze code patterns and provide simulated output
+    // Enhanced code analysis for better offline feedback
     if (code.trim().isEmpty) {
-      simulatedOutput = '❌ No code to execute\nPlease write some code first.';
-    } else if (_containsPattern(code, [
-      'print',
-      'console.log',
-      'System.out',
-      'Console.WriteLine',
-    ])) {
-      simulatedOutput = _simulatePrintStatements(code);
-    } else if (_containsPattern(code, ['for', 'while', 'loop'])) {
-      simulatedOutput = _simulateLoops(code);
-    } else if (_containsPattern(code, ['if', 'else', 'switch', 'case'])) {
-      simulatedOutput = _simulateConditionals(code);
-    } else if (_containsPattern(code, [
-      'function',
-      'def ',
-      'void ',
-      'public ',
-      'private ',
-    ])) {
-      simulatedOutput = _simulateFunctions(code);
-    } else if (_containsPattern(code, ['+', '-', '*', '/', '='])) {
-      simulatedOutput = _simulateCalculations(code);
+      analyzedOutput = '❌ No code to execute\nPlease write some code first.';
     } else {
-      simulatedOutput = _generateGenericOutput(code);
+      analyzedOutput = _analyzeCodeStructure(code);
     }
 
     if (mounted) {
       setState(() {
-        _output = '''🟡 OFFLINE SIMULATION MODE
+        _output = '''🔍 ENHANCED OFFLINE ANALYSIS
 🌐 Connection: Offline
 💻 Language: ${_getDisplayName(_selectedLanguage)}
-📊 Process ID: ${random.nextInt(9999)}
+📊 Analysis Result:
 
---- Execution Output ---
-$simulatedOutput
-
---- Program Finished ---
-Exit code: 0
-⏱️ Execution time: ${(0.5 + random.nextDouble() * 2).toStringAsFixed(2)}s
+$analyzedOutput
 
 💡 Tip: Connect to internet for real code execution''';
         _isExecuting = false;
@@ -650,151 +637,304 @@ Exit code: 0
     }
   }
 
-  bool _containsPattern(String code, List<String> patterns) {
-    return patterns.any(
-      (pattern) => code.toLowerCase().contains(pattern.toLowerCase()),
-    );
-  }
-
-  String _simulatePrintStatements(String code) {
+  // NEW: Advanced code structure analysis
+  String _analyzeCodeStructure(String code) {
+    final output = StringBuffer();
     final lines = code.split('\n');
-    final output = StringBuffer();
-    final random = Random();
+    int lineCount = lines.length;
+    int nonEmptyLines = lines.where((line) => line.trim().isNotEmpty).length;
 
-    for (final line in lines) {
-      if (line.contains('print') ||
-          line.contains('console.log') ||
-          line.contains('System.out') ||
-          line.contains('Console.WriteLine')) {
-        // Extract content between quotes or parentheses
-        final content = _extractContent(line);
-        if (content.isNotEmpty) {
-          output.writeln(content);
-        } else {
-          // Generate random output for print statements without clear content
-          final outputs = [
-            'Hello, World!',
-            '42',
-            '3.14159',
-            'true',
-            'false',
-            'Dart is awesome!',
-            'Code executed successfully',
-            'Variable value: ${random.nextInt(100)}',
-            'Result: ${random.nextDouble() * 100}',
-            'Array length: ${random.nextInt(10)}',
-          ];
-          output.writeln(outputs[random.nextInt(outputs.length)]);
-        }
-      }
+    output.writeln('📊 Code Analysis:');
+    output.writeln('📄 Total lines: $lineCount');
+    output.writeln('📝 Non-empty lines: $nonEmptyLines');
+    output.writeln('');
+
+    // Language-specific analysis
+    switch (_selectedLanguage) {
+      case 'python':
+        _analyzePythonCode(code, output);
+        break;
+      case 'java':
+        _analyzeJavaCode(code, output);
+        break;
+      case 'csharp':
+        _analyzeCSharpCode(code, output);
+        break;
     }
 
-    return output.toString().isEmpty
-        ? 'Program executed (print statements detected)'
-        : output.toString();
-  }
-
-  String _simulateLoops(String code) {
-    final random = Random();
-    final output = StringBuffer();
-    final iterations = 3 + random.nextInt(5); // Simulate 3-7 iterations
-
-    output.writeln('🔄 Loop executing $iterations times:');
-
-    for (int i = 0; i < iterations; i++) {
-      output.writeln('📝 Iteration $i: i = $i, value = ${random.nextInt(100)}');
-    }
-
-    output.writeln('✅ Loop completed successfully');
     return output.toString();
   }
 
-  String _simulateConditionals(String code) {
-    final random = Random();
-    final conditions = [
-      'true',
-      'false',
-      'x > 5',
-      'name == "John"',
-      'count < 10',
-    ];
-    final selectedCondition = conditions[random.nextInt(conditions.length)];
+  void _analyzePythonCode(String code, StringBuffer output) {
+    final functions = RegExp(r'def\s+(\w+)\s*\(').allMatches(code);
+    final imports = RegExp(r'^import\s+(\w+)', multiLine: true).allMatches(code);
+    final prints = RegExp(r'print\s*\(([^)]+)\)').allMatches(code);
+    final variables = RegExp(r'^(\w+)\s*=').allMatches(code);
+    final classes = RegExp(r'class\s+(\w+)').allMatches(code);
 
-    return '''🔍 Condition evaluated: $selectedCondition
-📋 Branch executed: ${random.nextBool() ? 'if block' : 'else block'}
-🎯 Result: ${random.nextBool() ? 'Condition met' : 'Condition not met'}''';
+    if (functions.isNotEmpty) {
+      output.writeln('🔧 Functions found:');
+      for (final match in functions) {
+        output.writeln('   - ${match.group(1)}()');
+      }
+      output.writeln('');
+    }
+
+    if (imports.isNotEmpty) {
+      output.writeln('📦 Imports found:');
+      for (final match in imports) {
+        output.writeln('   - ${match.group(1)}');
+      }
+      output.writeln('');
+    }
+
+    if (classes.isNotEmpty) {
+      output.writeln('🏗️ Classes found:');
+      for (final match in classes) {
+        output.writeln('   - ${match.group(1)}');
+      }
+      output.writeln('');
+    }
+
+    if (variables.isNotEmpty) {
+      output.writeln('💾 Variables found: ${variables.length}');
+      output.writeln('');
+    }
+
+    if (prints.isNotEmpty) {
+      output.writeln('🖨️ Print statements: ${prints.length}');
+      output.writeln('   Expected output:');
+      for (final match in prints) {
+        final content = match.group(1);
+        if (content != null) {
+          final evaluated = _evaluatePythonExpression(content);
+          output.writeln('   - $evaluated');
+        }
+      }
+    } else {
+      output.writeln('💡 No print statements found');
+    }
+
+    // Check for common patterns
+    if (code.contains('for ') && code.contains(' in ')) {
+      output.writeln('\n🔄 For loop detected');
+    }
+    if (code.contains('if ') && code.contains(':')) {
+      output.writeln('🔍 If statements detected');
+    }
+    if (code.contains('while ')) {
+      output.writeln('⚡ While loop detected');
+    }
   }
 
-  String _simulateFunctions(String code) {
-    final random = Random();
-    final functions = [
-      'main()',
-      'calculate()',
-      'processData()',
-      'initialize()',
-      'run()',
-    ];
-    final calledFunction = functions[random.nextInt(functions.length)];
+  void _analyzeJavaCode(String code, StringBuffer output) {
+    final methods = RegExp(r'(public|private|protected)?\s*\w+\s+(\w+)\s*\(').allMatches(code);
+    final classes = RegExp(r'class\s+(\w+)').allMatches(code);
+    final prints = RegExp(r'System\.out\.(print|println)\s*\(([^)]+)\)').allMatches(code);
+    final variables = RegExp(r'\w+\s+(\w+)\s*=').allMatches(code);
 
-    return '''📞 Function $calledFunction called
-⚙️ Parameters processed: ${random.nextInt(5)}
-📤 Return value: ${random.nextInt(100)}
-✅ Execution completed in ${random.nextDouble() * 10}ms''';
+    if (classes.isNotEmpty) {
+      output.writeln('🏗️ Classes found:');
+      for (final match in classes) {
+        output.writeln('   - ${match.group(1)}');
+      }
+      output.writeln('');
+    }
+
+    if (methods.isNotEmpty) {
+      output.writeln('🔧 Methods found:');
+      for (final match in methods) {
+        if (match.group(2) != 'main' && match.group(2) != 'class') {
+          output.writeln('   - ${match.group(2)}()');
+        }
+      }
+      output.writeln('');
+    }
+
+    if (variables.isNotEmpty) {
+      output.writeln('💾 Variables found: ${variables.length}');
+      output.writeln('');
+    }
+
+    if (prints.isNotEmpty) {
+      output.writeln('🖨️ Print statements: ${prints.length}');
+      output.writeln('   Expected output:');
+      for (final match in prints) {
+        final content = match.group(2);
+        if (content != null) {
+          final evaluated = _evaluateJavaExpression(content);
+          output.writeln('   - $evaluated');
+        }
+      }
+    } else {
+      output.writeln('💡 No print statements found');
+    }
+
+    // Check for common patterns
+    if (code.contains('for (')) {
+      output.writeln('\n🔄 For loop detected');
+    }
+    if (code.contains('if (')) {
+      output.writeln('🔍 If statements detected');
+    }
+    if (code.contains('while (')) {
+      output.writeln('⚡ While loop detected');
+    }
   }
 
-  String _simulateCalculations(String code) {
-    final random = Random();
-    final calculations = [
-      '🧮 Result: ${random.nextInt(100)}',
-      '➕ Sum: ${random.nextInt(50) + random.nextInt(50)}',
-      '✖️ Product: ${random.nextInt(10) * random.nextInt(10)}',
-      '📊 Average: ${(random.nextDouble() * 100).toStringAsFixed(2)}',
-      '✅ Calculation completed successfully',
-    ];
+  void _analyzeCSharpCode(String code, StringBuffer output) {
+    final methods = RegExp(r'(public|private|protected)?\s*\w+\s+(\w+)\s*\(').allMatches(code);
+    final classes = RegExp(r'class\s+(\w+)').allMatches(code);
+    final prints = RegExp(r'Console\.(Write|WriteLine)\s*\(([^)]+)\)').allMatches(code);
+    final variables = RegExp(r'\w+\s+(\w+)\s*=').allMatches(code);
 
-    return calculations[random.nextInt(calculations.length)];
+    if (classes.isNotEmpty) {
+      output.writeln('🏗️ Classes found:');
+      for (final match in classes) {
+        output.writeln('   - ${match.group(1)}');
+      }
+      output.writeln('');
+    }
+
+    if (methods.isNotEmpty) {
+      output.writeln('🔧 Methods found:');
+      for (final match in methods) {
+        if (match.group(2) != 'Main' && match.group(2) != 'class') {
+          output.writeln('   - ${match.group(2)}()');
+        }
+      }
+      output.writeln('');
+    }
+
+    if (variables.isNotEmpty) {
+      output.writeln('💾 Variables found: ${variables.length}');
+      output.writeln('');
+    }
+
+    if (prints.isNotEmpty) {
+      output.writeln('🖨️ Console writes: ${prints.length}');
+      output.writeln('   Expected output:');
+      for (final match in prints) {
+        final content = match.group(2);
+        if (content != null) {
+          final evaluated = _evaluateCSharpExpression(content);
+          output.writeln('   - $evaluated');
+        }
+      }
+    } else {
+      output.writeln('💡 No console output statements found');
+    }
+
+    // Check for common patterns
+    if (code.contains('for (')) {
+      output.writeln('\n🔄 For loop detected');
+    }
+    if (code.contains('if (')) {
+      output.writeln('🔍 If statements detected');
+    }
+    if (code.contains('while (')) {
+      output.writeln('⚡ While loop detected');
+    }
   }
 
-  String _generateGenericOutput(String code) {
-    final random = Random();
-    final lines = code.split('\n').where((line) => line.trim().isNotEmpty).length;
-    final chars = code.length;
+  String _evaluatePythonExpression(String expr) {
+    expr = expr.trim();
+    
+    // Remove surrounding quotes
+    if ((expr.startsWith("'") && expr.endsWith("'")) ||
+        (expr.startsWith('"') && expr.endsWith('"'))) {
+      return expr.substring(1, expr.length - 1);
+    }
 
-    final outputs = [
-      '✅ Program executed successfully',
-      '📝 Code processed without errors',
-      '🎉 Execution completed',
-      '📄 $lines lines of code processed',
-      '🔤 $chars characters compiled successfully',
-      'ℹ️ No output generated (program may be waiting for input)',
-      '🏁 Execution finished with exit code 0',
-    ];
-
-    return outputs[random.nextInt(outputs.length)];
-  }
-
-  String _extractContent(String line) {
-    // Try to extract content from quotes
-    final quoteRegExp = RegExp(r'''["']([^"']*)["']''');
-    final quoteMatch = quoteRegExp.firstMatch(line);
-    if (quoteMatch != null) {
-      final content = quoteMatch.group(1);
-      if (content != null && content.isNotEmpty) {
-        return content;
+    // Simple arithmetic
+    if (RegExp(r'^\d+\s*[\+\-\*\/]\s*\d+$').hasMatch(expr)) {
+      try {
+        if (expr.contains('+')) {
+          final parts = expr.split('+');
+          final a = int.tryParse(parts[0].trim()) ?? double.tryParse(parts[0].trim());
+          final b = int.tryParse(parts[1].trim()) ?? double.tryParse(parts[1].trim());
+          if (a != null && b != null) return (a + b).toString();
+        }
+        if (expr.contains('-')) {
+          final parts = expr.split('-');
+          final a = int.tryParse(parts[0].trim()) ?? double.tryParse(parts[0].trim());
+          final b = int.tryParse(parts[1].trim()) ?? double.tryParse(parts[1].trim());
+          if (a != null && b != null) return (a - b).toString();
+        }
+      } catch (e) {
+        return expr;
       }
     }
 
-    // Try to extract content from parentheses
-    final parenRegExp = RegExp(r'\((.*?)\)');
-    final parenMatch = parenRegExp.firstMatch(line);
-    if (parenMatch != null) {
-      final content = parenMatch.group(1);
-      if (content != null && content.isNotEmpty) {
-        return content;
+    // String concatenation
+    if (expr.contains('+') && (expr.contains("'") || expr.contains('"'))) {
+      try {
+        final parts = expr.split('+');
+        final result = parts.map((part) {
+          final trimmed = part.trim();
+          if ((trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+              (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+            return trimmed.substring(1, trimmed.length - 1);
+          }
+          return trimmed;
+        }).join();
+        return result;
+      } catch (e) {
+        return expr.replaceAll("'", "").replaceAll('"', '');
       }
     }
 
-    return '';
+    return expr;
+  }
+
+  String _evaluateJavaExpression(String expr) {
+    expr = expr.replaceAll(';', '').trim();
+    
+    // Handle strings
+    if (expr.startsWith('"') && expr.endsWith('"')) {
+      return expr.substring(1, expr.length - 1);
+    }
+
+    // Simple arithmetic
+    if (RegExp(r'^\d+\s*[\+\-\*\/]\s*\d+$').hasMatch(expr)) {
+      try {
+        if (expr.contains('+')) {
+          final parts = expr.split('+');
+          final a = int.tryParse(parts[0].trim());
+          final b = int.tryParse(parts[1].trim());
+          if (a != null && b != null) return (a + b).toString();
+        }
+      } catch (e) {
+        return expr;
+      }
+    }
+
+    return expr;
+  }
+
+  String _evaluateCSharpExpression(String expr) {
+    expr = expr.replaceAll(';', '').trim();
+    
+    // Handle strings
+    if (expr.startsWith('"') && expr.endsWith('"')) {
+      return expr.substring(1, expr.length - 1);
+    }
+
+    // Simple arithmetic
+    if (RegExp(r'^\d+\s*[\+\-\*\/]\s*\d+$').hasMatch(expr)) {
+      try {
+        if (expr.contains('+')) {
+          final parts = expr.split('+');
+          final a = int.tryParse(parts[0].trim());
+          final b = int.tryParse(parts[1].trim());
+          if (a != null && b != null) return (a + b).toString();
+        }
+      } catch (e) {
+        return expr;
+      }
+    }
+
+    return expr;
   }
 
   String _getDisplayName(String value) {
@@ -805,7 +945,6 @@ Exit code: 0
         return 'Java';
       case 'csharp':
         return 'C#';
-      // 'vb': return 'VB', // REMOVED
       default:
         return value;
     }
@@ -819,7 +958,6 @@ Exit code: 0
         return 'Java';
       case 'csharp':
         return 'C#';
-      // 'vb': return 'VB', // REMOVED
       default:
         return lang;
     }
@@ -889,6 +1027,11 @@ Exit code: 0
       );
     }
 
+    // NEW: Show file selection screen first
+    if (_showFileSelection) {
+      return _buildFileSelectionScreen();
+    }
+
     final screenSize = MediaQuery.of(context).size;
     final isSmallScreen = screenSize.width < 600;
     final isVerySmallScreen = screenSize.width < 400;
@@ -956,15 +1099,36 @@ Exit code: 0
           ],
         ),
         actions: [
-          // Theme toggle button
+          // NEW: Back to file selection button
           IconButton(
-            icon: Icon(
-              _isDarkMode ? Icons.dark_mode : Icons.light_mode,
-              size: iconSize,
-            ),
-            onPressed: _toggleTheme,
-            tooltip: 'Toggle Theme',
+            icon: Icon(Icons.folder_open, size: iconSize),
+            onPressed: _showFileSelectionScreen,
+            tooltip: 'Open File Selection',
             padding: EdgeInsets.all(isVerySmallScreen ? 4 : 8),
+          ),
+          
+          // Language dropdown - now more prominent and accessible
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 8),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _selectedLanguage,
+                items: dropdownItems,
+                onChanged: _changeLanguage,
+                dropdownColor: _isDarkMode ? Colors.grey[800] : Colors.white,
+                iconSize: isSmallScreen ? 18 : 24,
+                style: TextStyle(
+                  color: _isDarkMode ? Colors.white : Colors.black,
+                  fontSize: isSmallScreen ? 12 : 14,
+                ),
+                icon: Icon(
+                  Icons.arrow_drop_down,
+                  color: Colors.white,
+                  size: isSmallScreen ? 18 : 24,
+                ),
+                underline: Container(),
+              ),
+            ),
           ),
           
           // Run button with loading indicator
@@ -987,27 +1151,7 @@ Exit code: 0
                   padding: EdgeInsets.all(isVerySmallScreen ? 4 : 8),
                 ),
           
-          // Language dropdown - visible on all but very small screens
-          if (!isVerySmallScreen) ...[
-            Container(
-              padding: EdgeInsets.symmetric(horizontal: 8),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: _selectedLanguage,
-                  items: dropdownItems,
-                  onChanged: _changeLanguage,
-                  dropdownColor: _isDarkMode ? Colors.grey[800] : Colors.white,
-                  iconSize: isSmallScreen ? 18 : 24,
-                  style: TextStyle(
-                    color: Colors.black,
-                    fontSize: isSmallScreen ? 12 : 14,
-                  ),
-                ),
-              ),
-            ),
-          ],
-          
-          // Overflow menu for additional options
+          // Overflow menu for additional options including theme
           PopupMenuButton<String>(
             icon: Icon(Icons.more_vert, size: iconSize),
             onSelected: (value) {
@@ -1021,17 +1165,8 @@ Exit code: 0
                 case 'update_info':
                   _updateRoomInfo();
                   break;
-                case 'copy':
-                  _copyCode();
-                  break;
-                case 'clear':
-                  _clearCode();
-                  break;
-                case 'language':
-                  // Show language selection dialog on very small screens
-                  if (isVerySmallScreen) {
-                    _showLanguageSelectionDialog();
-                  }
+                case 'theme':
+                  _toggleTheme();
                   break;
               }
             },
@@ -1057,26 +1192,13 @@ Exit code: 0
                   title: Text('Update File Info'),
                 ),
               ),
-              if (isVerySmallScreen)
-                const PopupMenuItem(
-                  value: 'language',
-                  child: ListTile(
-                    leading: Icon(Icons.code),
-                    title: Text('Change Language'),
+              PopupMenuItem(
+                value: 'theme',
+                child: ListTile(
+                  leading: Icon(
+                    _isDarkMode ? Icons.light_mode : Icons.dark_mode,
                   ),
-                ),
-              const PopupMenuItem(
-                value: 'copy',
-                child: ListTile(
-                  leading: Icon(Icons.copy),
-                  title: Text('Copy Code'),
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'clear',
-                child: ListTile(
-                  leading: Icon(Icons.delete),
-                  title: Text('Clear Code'),
+                  title: Text(_isDarkMode ? 'Light Mode' : 'Dark Mode'),
                 ),
               ),
             ],
@@ -1088,8 +1210,8 @@ Exit code: 0
         child: TabBarView(
           controller: _tabController,
           children: [
-            // Editor Tab
-            _buildEditorTab(isSmallScreen, bodyFontSize),
+            // Editor Tab - with clear and copy buttons at top right
+            _buildEditorTab(isSmallScreen, bodyFontSize, iconSize),
 
             // Output Tab
             _buildOutputTab(isSmallScreen, bodyFontSize, iconSize),
@@ -1102,25 +1224,199 @@ Exit code: 0
     );
   }
 
-  Widget _buildEditorTab(bool isSmallScreen, double bodyFontSize) {
-    return Container(
-      color: _isDarkMode ? Colors.black : Colors.grey[200],
-      child: CodeTheme(
-        data: CodeThemeData(
-          styles: _isDarkMode ? atomOneDarkTheme : githubTheme,
-        ),
-        child: SingleChildScrollView(
-          child: CodeField(
-            controller: _codeController,
-            textStyle: TextStyle(
-              fontFamily: 'SourceCodePro',
-              fontSize: bodyFontSize,
-              color: _isDarkMode ? Colors.white : Colors.black,
-            ),
-            minLines: 10,
-            maxLines: 1000,
+  // NEW: File selection screen
+  Widget _buildFileSelectionScreen() {
+    final screenSize = MediaQuery.of(context).size;
+    final isSmallScreen = screenSize.width < 600;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Code Editor'),
+        foregroundColor: Colors.white,
+        backgroundColor: Colors.indigo,
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 40),
+              Center(
+                child: Icon(
+                  Icons.code,
+                  size: 80,
+                  color: Colors.indigo,
+                ),
+              ),
+              const SizedBox(height: 40),
+              Text(
+                'Welcome to Code Editor',
+                style: TextStyle(
+                  fontSize: isSmallScreen ? 24 : 32,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.indigo,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Choose how you want to start coding:',
+                style: TextStyle(
+                  fontSize: isSmallScreen ? 16 : 18,
+                  color: Colors.grey[600],
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 60),
+              
+              // New File Option
+              Card(
+                elevation: 4,
+                child: ListTile(
+                  leading: Icon(
+                    Icons.create_new_folder,
+                    size: 40,
+                    color: Colors.green,
+                  ),
+                  title: Text(
+                    'Create New File',
+                    style: TextStyle(
+                      fontSize: isSmallScreen ? 18 : 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'Start with a blank file and write new code',
+                    style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+                  ),
+                  trailing: Icon(Icons.arrow_forward_ios),
+                  onTap: _startNewFile,
+                ),
+              ),
+              
+              const SizedBox(height: 20),
+              
+              // Open Existing File Option
+              Card(
+                elevation: 4,
+                child: ListTile(
+                  leading: Icon(
+                    Icons.folder_open,
+                    size: 40,
+                    color: Colors.blue,
+                  ),
+                  title: Text(
+                    'Open Existing File',
+                    style: TextStyle(
+                      fontSize: isSmallScreen ? 18 : 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'Open and continue working on a saved file',
+                    style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
+                  ),
+                  trailing: Icon(Icons.arrow_forward_ios),
+                  onTap: () {
+                    // Navigate to files tab to select a file
+                    setState(() {
+                      _showFileSelection = false;
+                      _tabController.animateTo(2); // Switch to files tab
+                    });
+                  },
+                ),
+              ),
+              
+              const Spacer(),
+              
+              // Additional info
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.grey[50],
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  children: [
+                    Icon(
+                      Icons.info,
+                      color: Colors.blue,
+                      size: 24,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'You can always switch between files using the folder icon in the app bar',
+                      style: TextStyle(
+                        fontSize: isSmallScreen ? 12 : 14,
+                        color: Colors.grey[600],
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildEditorTab(bool isSmallScreen, double bodyFontSize, double iconSize) {
+    return Container(
+      color: _isDarkMode ? Colors.black : Colors.grey[200],
+      child: Column(
+        children: [
+          // Clear and Copy buttons at top right of editor tab
+          Container(
+            padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
+            color: _isDarkMode ? Colors.grey[800] : Colors.grey[300],
+            child: Row(
+              children: [
+                Text(
+                  'Code Editor - ${_getDisplayName(_selectedLanguage)}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: bodyFontSize,
+                    color: _isDarkMode ? Colors.white : Colors.black,
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: Icon(Icons.copy, size: iconSize),
+                  onPressed: _copyCode,
+                  tooltip: 'Copy Code',
+                ),
+                IconButton(
+                  icon: Icon(Icons.clear_all, size: iconSize),
+                  onPressed: _clearCode,
+                  tooltip: 'Clear Code',
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: CodeTheme(
+              data: CodeThemeData(
+                styles: _isDarkMode ? atomOneDarkTheme : githubTheme,
+              ),
+              child: SingleChildScrollView(
+                child: CodeField(
+                  controller: _codeController,
+                  textStyle: TextStyle(
+                    fontFamily: 'SourceCodePro',
+                    fontSize: bodyFontSize,
+                    color: _isDarkMode ? Colors.white : Colors.black,
+                  ),
+                  minLines: 10,
+                  maxLines: 1000,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1255,6 +1551,12 @@ Exit code: 0
                                 textAlign: TextAlign.center,
                               ),
                             ),
+                            const SizedBox(height: 20),
+                            ElevatedButton.icon(
+                              onPressed: _startNewFile,
+                              icon: Icon(Icons.add),
+                              label: Text('Create New File'),
+                            ),
                           ],
                         ),
                       )
@@ -1345,7 +1647,7 @@ Exit code: 0
                                       icon: Icon(Icons.more_vert, size: iconSize - 4),
                                       onSelected: (value) {
                                         if (value == 'load') {
-                                          _loadRoom(room);
+                                          _openExistingFile(room);
                                         } else if (value == 'delete') {
                                           _deleteRoom(room);
                                         }
@@ -1367,40 +1669,13 @@ Exit code: 0
                                         ),
                                       ],
                                     ),
-                              onTap: () => _loadRoom(room),
+                              onTap: () => _openExistingFile(room),
                             ),
                           );
                         },
                       ),
           ),
         ],
-      ),
-    );
-  }
-
-  void _showLanguageSelectionDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Select Language'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: ListView.builder(
-            shrinkWrap: true,
-            itemCount: _languages.length,
-            itemBuilder: (context, index) {
-              final languageKey = _languages.keys.elementAt(index);
-              return ListTile(
-                leading: Icon(_getFileIcon(languageKey)),
-                title: Text(_getDisplayName(languageKey)),
-                onTap: () {
-                  Navigator.pop(context);
-                  _changeLanguage(languageKey);
-                },
-              );
-            },
-          ),
-        ),
       ),
     );
   }
@@ -1413,7 +1688,6 @@ Exit code: 0
         return Icons.coffee;
       case 'csharp':
         return Icons.code;
-      // 'vb': return Icons.data_object, // REMOVED
       default:
         return Icons.insert_drive_file;
     }

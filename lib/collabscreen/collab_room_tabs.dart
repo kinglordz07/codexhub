@@ -37,12 +37,15 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
   String? mentorId;
   String? liveSessionId;
   String? currentMenteeId;
-  bool isViewer = false;
   bool _isInitializing = true;
-  StreamSubscription<List<Map<String, dynamic>>>? _subscriptionListener;
 
   final TextEditingController _mentorUsernameController = TextEditingController();
   bool _isInvitingMentor = false;
+
+  // ✅ REMOVED: Permission-related variables
+  // List<String> _allowedUsers = []; 
+  // List<Map<String, dynamic>> _roomMembers = []; 
+  // StreamSubscription<List<Map<String, dynamic>>>? _subscriptionListener;
 
   // ✅ ENHANCED: Better responsive detection
   bool get isSmallScreen {
@@ -70,13 +73,13 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _initUserAndListen();
+    _initUserAndSession();
   }
 
   @override
   void dispose() {
     _tabController.dispose();
-    _subscriptionListener?.cancel();
+    // ✅ REMOVED: Permission subscription disposal
     _mentorUsernameController.dispose();
     super.dispose();
   }
@@ -90,8 +93,8 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     return uuidRegex.hasMatch(uuid);
   }
 
-  // ✅ ENHANCED: Better initialization with mobile optimization
-  Future<void> _initUserAndListen() async {
+  // ✅ SIMPLIFIED: Initialize user and session only
+  Future<void> _initUserAndSession() async {
     currentUserId = supabase.auth.currentUser?.id;
     liveSessionId = widget.sessionId;
 
@@ -120,7 +123,7 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
           .select()
           .eq('id', liveSessionId!)
           .maybeSingle()
-          .timeout(const Duration(seconds: 10)); // ✅ ADDED: Timeout for mobile
+          .timeout(const Duration(seconds: 10));
 
       if (session != null) {
         debugPrint("✅ Found existing live session");
@@ -136,33 +139,8 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
         return;
       }
 
-      await _checkIfViewer();
-
-      // ✅ ENHANCED: Better real-time subscription with mobile optimization
-      _subscriptionListener = supabase
-          .from('live_sessions')
-          .stream(primaryKey: ['id'])
-          .eq('id', liveSessionId!)
-          .listen(
-        (payload) {
-          if (payload.isNotEmpty && mounted) {
-            final data = payload.first;
-            debugPrint("🔄 Live session update - mentor: ${data['mentor_id']}");
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) {
-                setState(() {
-                  mentorId = data['mentor_id'] as String?;
-                  currentMenteeId = data['mentee_id'] as String?;
-                });
-              }
-            });
-          }
-        },
-        onError: (error) {
-          debugPrint("❌ Live session stream error: $error");
-        },
-        cancelOnError: true,
-      );
+      // ✅ REMOVED: Permission loading and viewer checking
+      // All permission logic will be handled in CollabCodeEditorScreen
 
     } catch (e, st) {
       debugPrint("❌ Error in _initUserAndListen: $e\n$st");
@@ -176,6 +154,7 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     }
   }
 
+  // ✅ SIMPLIFIED: Just ensure user is in room
   Future<void> _ensureUserInRoom() async {
     if (currentUserId == null) return;
 
@@ -203,6 +182,7 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     }
   }
 
+  // ✅ SIMPLIFIED: Basic role checks
   bool get _amMentee =>
       currentUserId != null &&
       currentMenteeId != null &&
@@ -212,26 +192,16 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
       currentUserId != null && 
       mentorId != null && 
       currentUserId == mentorId;
-      
-  bool get canEdit => _amMentee || _amMentor;
 
-  Future<void> _checkIfViewer() async {
-    try {
-      final response = await supabase
-          .from('room_members')
-          .select('user_id')
-          .eq('room_id', widget.roomId)
-          .timeout(const Duration(seconds: 5));
+  // ✅ REMOVED: _shouldBeReadOnly logic - handled in CodeEditor
 
-      final members = List<Map<String, dynamic>>.from(response);
-      final isMember = members.any((m) => m['user_id'] == currentUserId);
-      if (mounted) {
-        setState(() => isViewer = isMember && !_amMentee && !_amMentor);
-      }
-    } catch (e) {
-      debugPrint("⚠️ Error checking room membership: $e");
-    }
-  }
+  // ✅ REMOVED: _loadPermissionsAndMembers method
+
+  // ✅ REMOVED: _showPermissionManager method
+
+  // ✅ REMOVED: _allowUserInCodeReview method
+
+  // ✅ REMOVED: _removeUserFromCodeReview method
 
   // ✅ ENHANCED: Mobile-optimized mentor invitation
   Future<void> inviteMentorByUsername(String username) async {
@@ -343,7 +313,7 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
                 style: TextStyle(fontSize: titleFontSize),
               ),
               content: SizedBox(
-                width: double.maxFinite, // ✅ FIXED: Better mobile width
+                width: double.maxFinite,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -491,7 +461,7 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
         _showSnack('👋 You were removed. Room was deleted.');
       }
 
-      await _initUserAndListen();
+      await _initUserAndSession();
     } catch (e) {
       debugPrint('❌ Error in _autoKickCreator: $e');
       _showSnack('Error transferring room ownership.');
@@ -508,7 +478,7 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
       }).eq('room_id', widget.roomId);
 
       _showSnack('🎯 You joined as mentor.');
-      await _initUserAndListen();
+      await _initUserAndSession();
     } catch (e) {
       debugPrint('❌ Error accepting invite as mentor: $e');
       _showSnack('Failed to join as mentor.');
@@ -523,7 +493,7 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
         'is_live': false
       }).eq('room_id', widget.roomId);
       _showSnack('👋 You left the mentoring session.');
-      await _initUserAndListen();
+      await _initUserAndSession();
     } catch (e) {
       debugPrint('❌ Error leaving as mentor: $e');
     }
@@ -607,6 +577,8 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     }
     return const SizedBox.shrink();
   }
+
+  // ✅ REMOVED: _buildMentorPermissionButton - handled in CodeEditor
 
   // ✅ ENHANCED: Mobile-optimized loading state
   Widget _buildLoadingState() {
@@ -695,6 +667,7 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
         ),
       ),
       actions: [
+        // ✅ REMOVED: Permission button - handled in CodeEditor
         _buildMentorInviteButton(),
         if (_amMentor)
           IconButton(
@@ -725,10 +698,14 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
       );
     }
 
+    // ✅ SIMPLIFIED: Just pass basic info to CodeEditor
+    debugPrint("🎯 BUILD - Current User: $currentUserId");
+    debugPrint("🎯 BUILD - Roles - Mentor: $_amMentor, Mentee: $_amMentee");
+
     return Scaffold(
       appBar: _buildAppBar(),
       body: SafeArea(
-        bottom: false, // ✅ IMPORTANT: Better mobile safe area handling
+        bottom: false,
         child: TabBarView(
           controller: _tabController,
           children: [
@@ -738,10 +715,10 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
               roomName: widget.roomName,
               isMentor: widget.isMentor,
             ),
-            // Code Editor Tab
+            // Code Editor Tab - ✅ ALL PERMISSION LOGIC HANDLED IN CODE EDITOR
             CollabCodeEditorScreen(
               roomId: widget.roomId,
-              isReadOnly: !canEdit,
+              isReadOnly: false, // ✅ Let CodeEditor handle permissions
               isMentor: _amMentor,
               liveSessionId: liveSessionId ?? widget.sessionId,
             ),

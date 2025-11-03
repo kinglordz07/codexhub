@@ -18,7 +18,7 @@ class LearningTools extends StatefulWidget {
 class _LearningToolsState extends State<LearningTools> {
   bool _isLoading = true;
   StreamSubscription? _articlesSubscription;
-
+  final Map<int, TextEditingController> _essayControllers = {};
   List<Map<String, dynamic>> _articles = [];
   List<Map<String, dynamic>> _quizQuestions = [];
   Map<String, List<String>> _videoIds = {};
@@ -33,6 +33,13 @@ class _LearningToolsState extends State<LearningTools> {
   int _quizTimeSeconds = 0;
   late Timer _quizTimer;
   final List<Map<String, dynamic>> _answeredQuestions = [];
+  String? _selectedMentor;
+  List<String> _availableMentors = [];
+  Map<String, List<Map<String, dynamic>>> _mentorQuizzes = {};
+  bool _quizStarted = false; 
+  bool _showCategorySelection = true;
+
+ 
 
   @override
   void initState() {
@@ -441,6 +448,10 @@ Future<void> _debugBucketContents() async {
   void dispose() {
     _articlesSubscription?.cancel();
     _quizTimer.cancel();
+    for (var controller in _essayControllers.values) {
+    controller.dispose();
+  }
+  _essayControllers.clear();
     super.dispose();
   }
 
@@ -496,23 +507,53 @@ Future<void> _debugBucketContents() async {
 
     List<Map<String, dynamic>> quizResponse = []; 
     try {
-      quizResponse = await client.from('quizzes').select().eq('is_active', true);
-      quizResponse = quizResponse.map((quiz) {
+      final quizData = await client
+          .from('quizzes')
+          .select()
+          .eq('is_active', true)
+          .order('created_by')
+          .order('quiz_group_name')
+          .order('question_order');
+
+      quizResponse = (quizData as List).map((item) => item as Map<String, dynamic>).toList().map((quiz) {
+        final answers = List<String>.from(quiz['answers'] ?? []);
+        final correctAnswers = List<String>.from(quiz['correct_answers'] ?? []);
+        final questionType = quiz['question_type']?.toString() ?? 'multiple_choice';
+
         return {
-          'question': quiz['question'],
-          'category': quiz['category'],
-          'answers': quiz['answers'] ?? [],
-          'correct': (quiz['correct_answers'] as List?)?.first ?? '',
+          'id': quiz['id'],
+          'question': quiz['question'] ?? 'Untitled Question',
+          'category': quiz['category'] ?? 'General',
+          'answers': answers,
+          'correct_answers': correctAnswers,
+          'question_type': questionType,
           'difficulty': quiz['difficulty'] ?? 'Medium',
+          'quiz_group_name': quiz['quiz_group_name'],
+          'question_order': quiz['question_order'],
+          'created_by': quiz['created_by'] ?? 'Unknown Mentor',
+          'user_id': quiz['user_id'],
         };
       }).toList();
     } catch (e) {
+      debugPrint('Error loading quizzes: $e');
       quizResponse = _generateFallbackQuiz(); 
     }
 
     if (quizResponse.isEmpty) { 
       quizResponse = _generateFallbackQuiz(); 
     }
+
+    final Map<String, List<Map<String, dynamic>>> mentorQuizzes = {};
+    for (final quiz in quizResponse) {
+      final mentorName = quiz['created_by'] as String? ?? 'System';
+      if (!mentorQuizzes.containsKey(mentorName)) {
+        mentorQuizzes[mentorName] = [];
+      }
+      mentorQuizzes[mentorName]!.add(quiz);
+    }
+
+    final mentors = mentorQuizzes.keys.toList();
+    mentors.sort();
 
     final processedArticles = _processArticles(articlesResponse);
 
@@ -521,6 +562,9 @@ Future<void> _debugBucketContents() async {
       _quizQuestions = quizResponse;
       _videoIds = {};
       _videoData = videosResponse;
+      _mentorQuizzes = mentorQuizzes;
+      _availableMentors = mentors;
+  
       
       for (var video in videosResponse) {
         final category = video['category'] as String? ?? 'General';
@@ -559,6 +603,220 @@ Future<void> _debugBucketContents() async {
     });
   }
 }
+
+Widget _buildMentorSelection() {
+  final isSmallScreen = MediaQuery.of(context).size.width < 600;
+
+  return Center(
+    child: SingleChildScrollView(
+      padding: EdgeInsets.all(isSmallScreen ? 16 : 24),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.school,
+            size: isSmallScreen ? 64 : 80,
+            color: Colors.purple,
+          ),
+          SizedBox(height: isSmallScreen ? 16 : 24),
+          Text(
+            'Choose Mentor\'s Quiz',
+            style: TextStyle(
+              fontSize: isSmallScreen ? 24 : 32,
+              fontWeight: FontWeight.bold,
+              color: Colors.purple,
+            ),
+          ),
+          SizedBox(height: isSmallScreen ? 8 : 12),
+          Text(
+            'Select which mentor\'s quiz you want to take',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: isSmallScreen ? 14 : 16,
+              color: Colors.grey[600],
+            ),
+          ),
+          SizedBox(height: isSmallScreen ? 24 : 32),
+          Card(
+            elevation: 4,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Padding(
+              padding: EdgeInsets.all(isSmallScreen ? 16 : 24),
+              child: Column(
+                children: [
+                  Text(
+                    'Available Mentors',
+                    style: TextStyle(
+                      fontSize: isSmallScreen ? 18 : 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  SizedBox(height: isSmallScreen ? 16 : 20),
+                  if (_availableMentors.isNotEmpty)
+                    ..._availableMentors.map((mentor) {
+                      final mentorQuizzes = _mentorQuizzes[mentor] ?? [];
+                      final totalQuestions = mentorQuizzes.length;
+                      final categories = mentorQuizzes
+                          .map((q) => q['category'] as String? ?? 'General')
+                          .toSet()
+                          .toList();
+                      
+                      return Padding(
+                        padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 4 : 6),
+                        child: ListTile(
+                          leading: Container(
+                            width: isSmallScreen ? 40 : 48,
+                            height: isSmallScreen ? 40 : 48,
+                            decoration: BoxDecoration(
+                              color: Colors.purple[100],
+                              borderRadius: BorderRadius.circular(24),
+                            ),
+                            child: Icon(
+                              Icons.person,
+                              color: Colors.purple,
+                              size: isSmallScreen ? 20 : 24,
+                            ),
+                          ),
+                          title: Text(
+                            mentor,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: isSmallScreen ? 16 : 18,
+                            ),
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('$totalQuestions questions'),
+                              if (categories.isNotEmpty)
+                                Text(
+                                  'Categories: ${categories.take(2).join(', ')}${categories.length > 2 ? '...' : ''}',
+                                  style: TextStyle(fontSize: isSmallScreen ? 12 : 14, color: Colors.grey[600]),
+                                ),
+                            ],
+                          ),
+                          trailing: _selectedMentor == mentor
+                              ? Icon(Icons.check_circle, color: Colors.green)
+                              : Icon(Icons.arrow_forward_ios, size: isSmallScreen ? 16 : 18, color: Colors.grey),
+                          onTap: () {
+                            setState(() {
+                              _selectedMentor = mentor;
+                            });
+                          },
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          tileColor: _selectedMentor == mentor
+                              ? Colors.purple[50]
+                              : Colors.grey[50],
+                        ),
+                      );
+                    }),
+                  SizedBox(height: isSmallScreen ? 20 : 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _selectedMentor != null ? _startQuiz : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.purple,
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 14 : 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: Text(
+    'Start ${_selectedMentor != null ? '${_selectedMentor!}\'s ' : ''}Quiz',
+                        style: TextStyle(
+                          fontSize: isSmallScreen ? 16 : 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          SizedBox(height: isSmallScreen ? 20 : 24),
+          Card(
+            child: Padding(
+              padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _buildStatItem(Icons.people, 'Mentors', '${_availableMentors.length}', isSmallScreen),
+                  _buildStatItem(Icons.quiz, 'Total Questions', '${_quizQuestions.length}', isSmallScreen),
+                  _buildStatItem(Icons.category, 'Quiz Groups', '${_mentorQuizzes.values.map((quizzes) => quizzes.map((q) => q['quiz_group_name']).toSet().length).fold(0, (sum, count) => sum + count)}', isSmallScreen),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+void _startQuiz() {
+  if (_selectedMentor == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Please select a mentor first'),
+        backgroundColor: Colors.orange,
+      ),
+    );
+    return;
+  }
+  
+  final mentorQuizzes = _mentorQuizzes[_selectedMentor] ?? [];
+  
+  if (mentorQuizzes.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('No quizzes available for $_selectedMentor'),
+        backgroundColor: Colors.red,
+      ),
+    );
+    return;
+  }
+
+  // Use the mentor's quizzes
+  final List<Map<String, dynamic>> filteredQuestions = List<Map<String, dynamic>>.from(mentorQuizzes);
+
+  if (filteredQuestions.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('No questions found for $_selectedMentor'),
+        backgroundColor: Colors.red,
+      ),
+    );
+    return;
+  }
+
+  filteredQuestions.sort((a, b) {
+    final orderA = a['question_order'] as int? ?? 0;
+    final orderB = b['question_order'] as int? ?? 0;
+    return orderA.compareTo(orderB);
+  });
+
+  
+  setState(() {
+    _quizQuestions = filteredQuestions;
+    _quizStarted = true;
+    _quizIndex = 0;
+    _score = 0;
+    _quizFinished = false;
+    _quizTimeSeconds = 0;
+    _selectedAnswer = null;
+    _showAnswerFeedback = false;
+    _answeredQuestions.clear();
+    _showCategorySelection = false;
+  });
+}
+
 
   String _extractMentorName(Map<String, dynamic> data) {
     if (data['mentor_name'] != null && data['mentor_name'].toString().isNotEmpty) {
@@ -992,40 +1250,63 @@ Widget _buildVideoSection(String title, List<String> videoIds) {
 }
 
   void _answerQuestion(String answer) {
-    if (_quizFinished || _showAnswerFeedback) return;
+  if (_quizFinished || _showAnswerFeedback) return;
 
-    setState(() {
-      _selectedAnswer = answer;
-      _showAnswerFeedback = true;
-    });
+  final currentQuestion = _quizQuestions[_quizIndex];
+  final questionType = currentQuestion['question_type']?.toString() ?? 'multiple_choice';
+  
+  setState(() {
+    _selectedAnswer = answer;
+    _showAnswerFeedback = true;
+  });
 
-    final correct = _quizQuestions[_quizIndex]['correct'] as String;
-    final isCorrect = answer == correct;
+  bool isCorrect = false;
+  
+  if (questionType == 'multiple_choice') {
+    final correctAnswers = List<String>.from(currentQuestion['correct_answers'] ?? []);
+    isCorrect = correctAnswers.contains(answer);
+  } else {
+    // For essay questions, always mark as correct (manual grading)
+    isCorrect = true;
     
-    if (isCorrect) _score++;
-
-    _answeredQuestions.add({
-      'question': _quizQuestions[_quizIndex]['question'],
-      'userAnswer': answer,
-      'correctAnswer': correct,
-      'isCorrect': isCorrect,
-    });
-
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) {
-        setState(() {
-          _showAnswerFeedback = false;
-          _selectedAnswer = null;
-          _quizIndex++;
-          if (_quizIndex >= _quizQuestions.length) {
-            _quizFinished = true;
-          }
-        });
-      }
-    });
+    // Clear the essay controller after submission
+    if (_essayControllers.containsKey(_quizIndex)) {
+      _essayControllers[_quizIndex]!.clear();
+    }
   }
+  
+  if (isCorrect) _score++;
+
+  _answeredQuestions.add({
+    'question': currentQuestion['question'],
+    'userAnswer': answer,
+    'correctAnswer': questionType == 'multiple_choice' 
+        ? (currentQuestion['correct_answers'] as List).join(', ')
+        : 'Essay - Manual Grading Required',
+    'isCorrect': isCorrect,
+    'question_type': questionType,
+  });
+
+  Future.delayed(const Duration(seconds: 2), () {
+    if (mounted) {
+      setState(() {
+        _showAnswerFeedback = false;
+        _selectedAnswer = null;
+        _quizIndex++;
+        if (_quizIndex >= _quizQuestions.length) {
+          _quizFinished = true;
+        }
+      });
+    }
+  });
+}
+
 
   void _resetQuiz() {
+    for (var controller in _essayControllers.values) {
+    controller.dispose();
+  }
+  _essayControllers.clear();
     setState(() {
       _quizIndex = 0;
       _score = 0;
@@ -1034,9 +1315,36 @@ Widget _buildVideoSection(String title, List<String> videoIds) {
       _selectedAnswer = null;
       _showAnswerFeedback = false;
       _answeredQuestions.clear();
+      _quizStarted = false;
+      _selectedMentor = null;
+      _showCategorySelection = true;
       _quizQuestions.shuffle(Random());
     });
   }
+
+  void _backToMentorSelection() {
+  setState(() {
+    _quizStarted = false;
+    _quizFinished = false;
+    _showCategorySelection = true;
+    _selectedMentor = null;
+    
+    // Clear any ongoing quiz state
+    _quizIndex = 0;
+    _score = 0;
+    _quizTimeSeconds = 0;
+    _selectedAnswer = null;
+    _showAnswerFeedback = false;
+    _answeredQuestions.clear();
+    
+    // Dispose essay controllers
+    for (var controller in _essayControllers.values) {
+      controller.dispose();
+    }
+    _essayControllers.clear();
+  });
+}
+
 
   Widget _buildQuizHeader() {
     final isSmallScreen = MediaQuery.of(context).size.width < 600;
@@ -1084,6 +1392,8 @@ Widget _buildVideoSection(String title, List<String> videoIds) {
                 Icon(Icons.quiz, size: isSmallScreen ? 14 : 16, color: Colors.indigo),
                 SizedBox(width: isSmallScreen ? 2 : 4),
                 Text('Score: $_score/${_quizQuestions.length}', style: TextStyle(fontSize: isSmallScreen ? 12 : 14, color: Colors.indigo, fontWeight: FontWeight.bold)),
+                SizedBox(width: isSmallScreen ? 12 : 16),
+                Icon(Icons.category, size: isSmallScreen ? 14 : 16, color: Colors.indigo),
               ],
             ),
           ],
@@ -1093,32 +1403,107 @@ Widget _buildVideoSection(String title, List<String> videoIds) {
   }
 
   Widget _buildQuestionCard(Map<String, dynamic> question) {
-    final isSmallScreen = MediaQuery.of(context).size.width < 600;
+  final isSmallScreen = MediaQuery.of(context).size.width < 600;
+  final questionType = question['question_type']?.toString() ?? 'multiple_choice';
+  final isEssay = questionType == 'essay';
 
-    return Card(
-      elevation: 3,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(question['question'] as String, style: TextStyle(fontSize: isSmallScreen ? 16 : 18, fontWeight: FontWeight.w600, height: 1.4)),
-            if (question['category'] != null) ...[
-              SizedBox(height: isSmallScreen ? 8 : 12),
+  return Card(
+    elevation: 3,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    child: Padding(
+      padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  question['question'] as String, 
+                  style: TextStyle(
+                    fontSize: isSmallScreen ? 16 : 18, 
+                    fontWeight: FontWeight.w600, 
+                    height: 1.4
+                  )
+                ),
+              ),
+              // Question type badge
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(4), border: Border.all(color: Colors.blue)),
-                child: Text(question['category'] as String, style: TextStyle(fontSize: isSmallScreen ? 10 : 12, color: Colors.blue[700], fontWeight: FontWeight.w500)),
+                decoration: BoxDecoration(
+                  color: isEssay ? Colors.orange[100] : Colors.blue[100],
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: isEssay ? Colors.orange : Colors.blue)
+                ),
+                child: Text(
+                  isEssay ? 'ESSAY' : 'MULTIPLE CHOICE',
+                  style: TextStyle(
+                    fontSize: isSmallScreen ? 10 : 12,
+                    color: isEssay ? Colors.orange[800] : Colors.blue[700],
+                    fontWeight: FontWeight.w500
+                  ),
+                ),
               ),
             ],
+          ),
+          if (question['category'] != null) ...[
+            SizedBox(height: isSmallScreen ? 8 : 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.blue[50], 
+                borderRadius: BorderRadius.circular(4), 
+                border: Border.all(color: Colors.blue)
+              ),
+              child: Text(
+                question['category'] as String, 
+                style: TextStyle(
+                  fontSize: isSmallScreen ? 10 : 12, 
+                  color: Colors.blue[700], 
+                  fontWeight: FontWeight.w500
+                )
+              ),
+            ),
           ],
-        ),
+          // Essay instructions
+          if (isEssay) ...[
+            SizedBox(height: isSmallScreen ? 12 : 16),
+            Container(
+              padding: EdgeInsets.all(isSmallScreen ? 10 : 12),
+              decoration: BoxDecoration(
+                color: Colors.orange[50],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.orange, size: isSmallScreen ? 16 : 18),
+                  SizedBox(width: isSmallScreen ? 8 : 12),
+                  Expanded(
+                    child: Text(
+                      'This is an essay question. Write your answer in the text area below.',
+                      style: TextStyle(
+                        color: Colors.orange[800],
+                        fontSize: isSmallScreen ? 12 : 14,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildAnswerOptions(Map<String, dynamic> question) {
+  final questionType = question['question_type']?.toString() ?? 'multiple_choice';
+  
+  if (questionType == 'essay') {
+    return _buildEssayAnswerInput();
+  } else {
     return Column(
       children: (question['answers'] as List).asMap().entries.map((entry) {
         final index = entry.key;
@@ -1127,93 +1512,349 @@ Widget _buildVideoSection(String title, List<String> videoIds) {
       }).toList(),
     );
   }
+}
 
-  Widget _buildEnhancedAnswerButton(Map<String, dynamic> question, String answer, int index) {
-    final isSmallScreen = MediaQuery.of(context).size.width < 600;
+  Widget _buildEssayAnswerInput() {
+  final isSmallScreen = MediaQuery.of(context).size.width < 600;
 
-    final isSelected = _selectedAnswer == answer;
-    final isCorrect = answer == question['correct'];
-    final showFeedback = _showAnswerFeedback;
-    
-    Color backgroundColor = Colors.grey[100]!;
-    Color textColor = Colors.black;
-    Color borderColor = Colors.grey[300]!;
-    
-    if (showFeedback) {
-      if (isSelected) {
-        backgroundColor = isCorrect ? Colors.green[50]! : Colors.red[50]!;
-        textColor = isCorrect ? Colors.green[800]! : Colors.red[800]!;
-        borderColor = isCorrect ? Colors.green : Colors.red;
-      } else if (isCorrect) {
-        backgroundColor = Colors.green[50]!;
-        textColor = Colors.green[800]!;
-        borderColor = Colors.green;
-      }
-    } else if (isSelected) {
-      backgroundColor = Colors.indigo[50]!;
-      borderColor = Colors.indigo;
-    }
-    
-    return Padding(
-      padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 4 : 6),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
+   if (!_essayControllers.containsKey(_quizIndex)) {
+    _essayControllers[_quizIndex] = TextEditingController();
+  }
+  final essayController = _essayControllers[_quizIndex]!;
+
+  return Column(
+    children: [
+      Container(
         decoration: BoxDecoration(
-          color: backgroundColor,
+          border: Border.all(color: Colors.grey[300]!),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: borderColor, width: 2),
-          boxShadow: [if (isSelected && !showFeedback) BoxShadow(color: Colors.indigo.withAlpha(128), blurRadius: 8, offset: const Offset(0, 2))],
+          color: Colors.white,
         ),
-        child: ListTile(
-          leading: Container(
-            width: isSmallScreen ? 28 : 32,
-            height: isSmallScreen ? 28 : 32,
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: borderColor)),
-            child: Center(child: Text(String.fromCharCode(65 + index), style: TextStyle(fontWeight: FontWeight.bold, color: textColor, fontSize: isSmallScreen ? 12 : 14))),
+        child: TextField(
+          controller: essayController,
+          maxLines: 6,
+          minLines: 4,
+          decoration: InputDecoration(
+            hintText: 'Type your essay answer here...',
+            border: InputBorder.none,
+            contentPadding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+            hintStyle: TextStyle(color: Colors.grey[500]),
           ),
-          title: Text(answer, style: TextStyle(fontSize: isSmallScreen ? 14 : 16, color: textColor, fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal)),
-          trailing: showFeedback ? Icon(isCorrect ? Icons.check_circle : Icons.cancel, color: isCorrect ? Colors.green : Colors.red, size: isSmallScreen ? 20 : 24) : null,
-          onTap: showFeedback ? null : () => _answerQuestion(answer),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
         ),
       ),
-    );
+      SizedBox(height: isSmallScreen ? 12 : 16),
+      Row(
+        children: [
+          // Clear button
+          Expanded(
+            child: OutlinedButton(
+              onPressed: () {
+                essayController.clear();
+                setState(() {});
+              },
+              style: OutlinedButton.styleFrom(
+                padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 12 : 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                side: BorderSide(color: Colors.grey),
+              ),
+              child: Text(
+                'Clear',
+                style: TextStyle(
+                  fontSize: isSmallScreen ? 14 : 16,
+                  color: Colors.grey[700],
+                ),
+              ),
+            ),
+          ),
+          SizedBox(width: isSmallScreen ? 12 : 16),
+          // Submit button
+          Expanded(
+            child: ElevatedButton(
+              onPressed: () {
+                final answer = essayController.text.trim();
+                if (answer.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Please write your essay answer before submitting.'),
+                      backgroundColor: Colors.orange,
+                    ),
+                  );
+                  return;
+                }
+                _answerQuestion(answer);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.white,
+                padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 12 : 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: Text(
+                'Submit Essay',
+                style: TextStyle(fontSize: isSmallScreen ? 14 : 16, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+        ],
+      ),
+      SizedBox(height: isSmallScreen ? 8 : 12),
+      Container(
+        padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
+        decoration: BoxDecoration(
+          color: Colors.blue[50],
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.info_outline, color: Colors.blue, size: isSmallScreen ? 16 : 18),
+            SizedBox(width: isSmallScreen ? 8 : 12),
+            Expanded(
+              child: Text(
+                'Essay answers are automatically marked as correct. As long as you filled it up.',
+                style: TextStyle(
+                  color: Colors.blue[800],
+                  fontSize: isSmallScreen ? 12 : 14,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ],
+  );
+}
+
+  Widget _buildEnhancedAnswerButton(Map<String, dynamic> question, String answer, int index) {
+  final isSmallScreen = MediaQuery.of(context).size.width < 600;
+
+  final isSelected = _selectedAnswer == answer;
+  final correctAnswers = List<String>.from(question['correct_answers'] ?? []);
+  final isCorrect = correctAnswers.contains(answer);
+  final showFeedback = _showAnswerFeedback;
+  
+  Color backgroundColor = Colors.grey[100]!;
+  Color textColor = Colors.black;
+  Color borderColor = Colors.grey[300]!;
+  
+  if (showFeedback) {
+    if (isSelected) {
+      backgroundColor = isCorrect ? Colors.green[50]! : Colors.red[50]!;
+      textColor = isCorrect ? Colors.green[800]! : Colors.red[800]!;
+      borderColor = isCorrect ? Colors.green : Colors.red;
+    } else if (isCorrect) {
+      backgroundColor = Colors.green[50]!;
+      textColor = Colors.green[800]!;
+      borderColor = Colors.green;
+    }
+  } else if (isSelected) {
+    backgroundColor = Colors.indigo[50]!;
+    borderColor = Colors.indigo;
   }
+  
+  return Padding(
+    padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 4 : 6),
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: borderColor, width: 2),
+        boxShadow: [if (isSelected && !showFeedback) BoxShadow(color: Colors.indigo.withAlpha(128), blurRadius: 8, offset: const Offset(0, 2))],
+      ),
+      child: ListTile(
+        leading: Container(
+          width: isSmallScreen ? 28 : 32,
+          height: isSmallScreen ? 28 : 32,
+          decoration: BoxDecoration(
+            color: Colors.white, 
+            borderRadius: BorderRadius.circular(8), 
+            border: Border.all(color: borderColor)
+          ),
+          child: Center(
+            child: Text(
+              String.fromCharCode(65 + index), 
+              style: TextStyle(
+                fontWeight: FontWeight.bold, 
+                color: textColor, 
+                fontSize: isSmallScreen ? 12 : 14
+              )
+            ),
+          ),
+        ),
+        title: Text(
+          answer, 
+          style: TextStyle(
+            fontSize: isSmallScreen ? 14 : 16, 
+            color: textColor, 
+            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal
+          )
+        ),
+        trailing: showFeedback 
+            ? Icon(
+                isCorrect ? Icons.check_circle : Icons.cancel, 
+                color: isCorrect ? Colors.green : Colors.red, 
+                size: isSmallScreen ? 20 : 24
+              ) 
+            : null,
+        onTap: showFeedback ? null : () => _answerQuestion(answer),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    ),
+  );
+}
 
   Widget _buildQuizQuestion() {
   final isSmallScreen = MediaQuery.of(context).size.width < 600;
 
-  if (_quizQuestions.isEmpty) {
-    return Center(child: Text('No quiz questions available.', style: TextStyle(fontSize: isSmallScreen ? 14 : 16, color: Colors.grey)));
+  if (_showCategorySelection || !_quizStarted) {
+    return _buildMentorSelection();
   }
 
-  final q = _quizQuestions[_quizIndex];
-  final correctAnswer = q['correct'] as String;
-  final isCorrect = _selectedAnswer == correctAnswer;
-
-  return ListView( 
-    shrinkWrap: true,
-    physics: NeverScrollableScrollPhysics(),
-    children: [
-      _buildQuizHeader(),
-      _buildQuestionCard(q),
-      SizedBox(height: isSmallScreen ? 12 : 16),
-      _buildAnswerOptions(q),
-      if (_showAnswerFeedback) ...[
-        SizedBox(height: isSmallScreen ? 12 : 16),
-        Container(
-          padding: EdgeInsets.all(isSmallScreen ? 10 : 12),
-          decoration: BoxDecoration(
-            color: isCorrect ? Colors.green[50]! : Colors.red[50]!,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: isCorrect ? Colors.green : Colors.red),
+  if (_quizQuestions.isEmpty) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.quiz_outlined, size: 64, color: Colors.grey),
+          SizedBox(height: 16),
+          Text(
+        'No quiz questions available.', 
+        style: TextStyle(fontSize: isSmallScreen ? 14 : 16, color: Colors.grey)
+      ),
+    SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: _backToMentorSelection,
+            child: Text('Choose Different Mentor'),
           ),
-          child: Text(
-            isCorrect ? 'Correct! Well done!' : 'Incorrect. The correct answer is: $correctAnswer',
-            style: TextStyle(color: isCorrect ? Colors.green[800]! : Colors.red[800]!, fontWeight: FontWeight.bold, fontSize: isSmallScreen ? 14 : 16),
+        ],
+      ),
+    );
+  }
+
+  if (_quizFinished) {
+    return _buildQuizResult();
+  }
+
+  final currentQuestion = _quizQuestions[_quizIndex];
+  final questionType = currentQuestion['question_type']?.toString() ?? 'multiple_choice';
+  final correctAnswers = List<String>.from(currentQuestion['correct_answers'] ?? []);
+  final isCorrect = _selectedAnswer != null && correctAnswers.contains(_selectedAnswer);
+
+   return Column(
+    children: [
+      // Mentor info and back button
+      if (!_quizFinished) ...[
+        Card(
+          margin: EdgeInsets.only(bottom: isSmallScreen ? 12 : 16),
+          child: Padding(
+            padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+            child: Row(
+              children: [
+                Container(
+                  width: isSmallScreen ? 40 : 48,
+                  height: isSmallScreen ? 40 : 48,
+                  decoration: BoxDecoration(
+                    color: Colors.purple[100],
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  child: Icon(
+                    Icons.person,
+                    color: Colors.purple,
+                    size: isSmallScreen ? 20 : 24,
+                  ),
+                ),
+                SizedBox(width: isSmallScreen ? 12 : 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _selectedMentor ?? 'Mentor',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: isSmallScreen ? 16 : 18,
+                          color: Colors.purple[800],
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'Quiz by ${_selectedMentor ?? 'Mentor'}',
+                        style: TextStyle(
+                          fontSize: isSmallScreen ? 12 : 14,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                ElevatedButton(
+                  onPressed: _backToMentorSelection,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.grey[300],
+                    foregroundColor: Colors.grey[800],
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: Text(
+                    'Change Mentor',
+                    style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ],
+      
+      Expanded(
+        child: ListView( 
+          shrinkWrap: true,
+          physics: AlwaysScrollableScrollPhysics(),
+          children: [
+            if (!_quizFinished) _buildQuizHeader(),
+            _buildQuestionCard(currentQuestion),
+            SizedBox(height: isSmallScreen ? 12 : 16),
+            _buildAnswerOptions(currentQuestion),
+            if (_showAnswerFeedback && questionType == 'multiple_choice') ...[
+              SizedBox(height: isSmallScreen ? 12 : 16),
+              Container(
+                padding: EdgeInsets.all(isSmallScreen ? 10 : 12),
+                decoration: BoxDecoration(
+                  color: isCorrect ? Colors.green[50]! : Colors.red[50]!,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: isCorrect ? Colors.green : Colors.red),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isCorrect ? 'Correct! Well done!' : 'Incorrect.',
+                      style: TextStyle(
+                        color: isCorrect ? Colors.green[800]! : Colors.red[800]!, 
+                        fontWeight: FontWeight.bold, 
+                        fontSize: isSmallScreen ? 14 : 16
+                      ),
+                    ),
+                    if (!isCorrect && correctAnswers.isNotEmpty) ...[
+                      SizedBox(height: isSmallScreen ? 4 : 6),
+                      Text(
+                        'Correct answer${correctAnswers.length > 1 ? 's' : ''}: ${correctAnswers.join(', ')}',
+                        style: TextStyle(
+                          color: Colors.green[800]!,
+                          fontSize: isSmallScreen ? 12 : 14,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     ],
   );
 }
@@ -1262,48 +1903,74 @@ Widget _buildVideoSection(String title, List<String> videoIds) {
     final isGoodScore = percentage >= 70;
     
     return Column(
-      children: [
-        Card(
-          elevation: 4,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          child: Padding(
-            padding: EdgeInsets.all(isSmallScreen ? 16 : 24),
-            child: Column(
-              children: [
-                Icon(
-                  isPerfect ? Icons.emoji_events : isGoodScore ? Icons.check_circle : Icons.autorenew,
-                  size: isSmallScreen ? 48 : 64,
-                  color: isPerfect ? Colors.amber : isGoodScore ? Colors.green : Colors.orange,
+    children: [
+      Card(
+        elevation: 4,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: EdgeInsets.all(isSmallScreen ? 16 : 24),
+          child: Column(
+            children: [
+              Icon(
+                isPerfect ? Icons.emoji_events : isGoodScore ? Icons.check_circle : Icons.autorenew,
+                size: isSmallScreen ? 48 : 64,
+                color: isPerfect ? Colors.amber : isGoodScore ? Colors.green : Colors.orange,
+              ),
+              SizedBox(height: isSmallScreen ? 12 : 16),
+              Text(isPerfect ? 'Perfect Score!' : isGoodScore ? 'Great Job!' : 'Keep Practicing!', style: TextStyle(fontSize: isSmallScreen ? 20 : 24, fontWeight: FontWeight.bold)),
+              SizedBox(height: isSmallScreen ? 6 : 8),
+              Text('$_score / ${_quizQuestions.length} (${percentage.toStringAsFixed(1)}%)', style: TextStyle(fontSize: isSmallScreen ? 16 : 20, color: Colors.grey[700])),
+              SizedBox(height: isSmallScreen ? 12 : 16),
+              Text(_getPerformanceMessage(percentage), textAlign: TextAlign.center, style: TextStyle(fontSize: isSmallScreen ? 14 : 16, color: Colors.grey[600], height: 1.5)),
+            ],
+          ),
+        ),
+      ),
+      SizedBox(height: isSmallScreen ? 16 : 24),
+      _buildQuizStats(),
+      SizedBox(height: isSmallScreen ? 16 : 24),
+      Row(
+        children: [
+          // Back to mentor selection button
+          Expanded(
+            child: OutlinedButton(
+              onPressed: _backToMentorSelection,
+              style: OutlinedButton.styleFrom(
+                padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 14 : 18),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                side: BorderSide(color: Colors.indigo),
+              ),
+              child: Text(
+                'Choose Different Mentor',
+                style: TextStyle(
+                  fontSize: isSmallScreen ? 16 : 18,
+                  color: Colors.indigo,
+                  fontWeight: FontWeight.bold
                 ),
-                SizedBox(height: isSmallScreen ? 12 : 16),
-                Text(isPerfect ? 'Perfect Score!' : isGoodScore ? 'Great Job!' : 'Keep Practicing!', style: TextStyle(fontSize: isSmallScreen ? 20 : 24, fontWeight: FontWeight.bold)),
-                SizedBox(height: isSmallScreen ? 6 : 8),
-                Text('$_score / ${_quizQuestions.length} (${percentage.toStringAsFixed(1)}%)', style: TextStyle(fontSize: isSmallScreen ? 16 : 20, color: Colors.grey[700])),
-                SizedBox(height: isSmallScreen ? 12 : 16),
-                Text(_getPerformanceMessage(percentage), textAlign: TextAlign.center, style: TextStyle(fontSize: isSmallScreen ? 14 : 16, color: Colors.grey[600], height: 1.5)),
-              ],
+              ),
             ),
           ),
-        ),
-        SizedBox(height: isSmallScreen ? 16 : 24),
-        _buildQuizStats(),
-        SizedBox(height: isSmallScreen ? 16 : 24),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            onPressed: _resetQuiz,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.indigo,
-              foregroundColor: Colors.white,
-              padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 14 : 18),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            child: Text('New Quiz', style: TextStyle(fontSize: isSmallScreen ? 16 : 18, fontWeight: FontWeight.bold)),
+          SizedBox(width: isSmallScreen ? 12 : 16),
+          // New quiz same mentor button
+          Expanded(
+            child: ElevatedButton(
+              onPressed: _resetQuiz,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.indigo,
+                foregroundColor: Colors.white,
+                padding: EdgeInsets.symmetric(vertical: isSmallScreen ? 14 : 18),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), ),
+            child: Text(
+                'New Quiz',
+                style: TextStyle(fontSize: isSmallScreen ? 16 : 18, fontWeight: FontWeight.bold),
           ),
-        ),
-      ],
-    );
-  }
+            ),
+          ),
+        ],
+      ),
+    ],
+  );
+}
 
   List<Map<String, dynamic>> _generateFallbackArticles() {
     return [
@@ -1319,23 +1986,33 @@ Widget _buildVideoSection(String title, List<String> videoIds) {
   }
 
   List<Map<String, dynamic>> _generateFallbackQuiz() {
-    return [
-      {
-        'question': 'What is Flutter primarily used for?',
-        'category': 'Mobile Development',
-        'answers': ['Web development', 'Mobile app development', 'Data analysis', 'Game development'],
-        'correct': 'Mobile app development',
-        'difficulty': 'Easy',
-      },
-      {
-        'question': 'Which programming language does Flutter use?',
-        'category': 'Mobile Development',
-        'answers': ['Java', 'Kotlin', 'Dart', 'Swift'],
-        'correct': 'Dart',
-        'difficulty': 'Easy',
-      },
-    ];
-  }
+  return [
+    {
+      'question': 'What is Flutter primarily used for?',
+      'category': 'Mobile Development',
+      'answers': ['Web development', 'Mobile app development', 'Data analysis', 'Game development'],
+      'correct_answers': ['Mobile app development'],
+      'question_type': 'multiple_choice',
+      'difficulty': 'Easy',
+    },
+    {
+      'question': 'Which programming language does Flutter use?',
+      'category': 'Mobile Development',
+      'answers': ['Java', 'Kotlin', 'Dart', 'Swift'],
+      'correct_answers': ['Dart'],
+      'question_type': 'multiple_choice',
+      'difficulty': 'Easy',
+    },
+    {
+      'question': 'Explain the benefits of using Flutter for cross-platform development.',
+      'category': 'Mobile Development',
+      'answers': [],
+      'correct_answers': [],
+      'question_type': 'essay',
+      'difficulty': 'Medium',
+    },
+  ];
+}
 
   @override
   Widget build(BuildContext context) {
@@ -1392,22 +2069,29 @@ Widget _buildVideoSection(String title, List<String> videoIds) {
                       padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
                       child: Column(
                         children: [
-                          _quizFinished ? _buildQuizResult() : _buildQuizQuestion(),
-                          SizedBox(height: isSmallScreen ? 16 : 20),
-                          if (!_quizFinished) ...[
-                            LinearProgressIndicator(
-                              value: _quizIndex / _quizQuestions.length,
-                              backgroundColor: Colors.grey[300],
-                              color: Colors.indigo,
-                              minHeight: isSmallScreen ? 10 : 12,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            SizedBox(height: isSmallScreen ? 6 : 8),
-                            Text('Progress: $_quizIndex/${_quizQuestions.length} questions', style: TextStyle(fontWeight: FontWeight.w500, fontSize: isSmallScreen ? 12 : 14)),
-                          ],
-                        ],
-                      ),
-                    ),
+                          if (_showCategorySelection || !_quizStarted)
+        _buildMentorSelection()
+      else if (_quizFinished)
+        _buildQuizResult()
+      else
+        _buildQuizQuestion(),
+      
+      // Only show progress for active quizzes
+      if (_quizStarted && !_quizFinished) ...[
+        SizedBox(height: isSmallScreen ? 16 : 20),
+        LinearProgressIndicator(
+          value: _quizIndex / _quizQuestions.length,
+          backgroundColor: Colors.grey[300],
+          color: Colors.indigo,
+          minHeight: isSmallScreen ? 10 : 12,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        SizedBox(height: isSmallScreen ? 6 : 8),
+        Text('Progress: $_quizIndex/${_quizQuestions.length} questions', style: TextStyle(fontWeight: FontWeight.w500, fontSize: isSmallScreen ? 12 : 14)),
+      ],
+    ],
+  ),
+),
                   ],
                 ),
         ),

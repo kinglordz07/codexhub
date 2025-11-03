@@ -261,4 +261,207 @@ Future<Map<String, dynamic>> resendVerificationEmail(String email) async {
     await _supabase.auth.signOut();
     debugPrint('✅ User signed out');
   }
+
+  // 🔹 SUBMIT MENTOR QUALIFICATION - FIXED METHOD
+Future<Map<String, dynamic>> submitMentorQualification(Map<String, dynamic> qualificationData) async {
+  try {
+    debugPrint('🎯 SUBMITTING MENTOR QUALIFICATION');
+    debugPrint('📝 Qualification data: $qualificationData');
+
+    // 1️⃣ Validate required fields
+    final requiredFields = ['username', 'email', 'fullName', 'profession', 'yearsOfExperience', 'education'];
+    for (final field in requiredFields) {
+      if (qualificationData[field] == null || qualificationData[field].toString().isEmpty) {
+        return {'success': false, 'error': 'Missing required field: $field'};
+      }
+    }
+
+    // 2️⃣ Check if user exists in profiles_new - FIXED QUERY
+    debugPrint('🔍 Checking user profile...');
+    final userProfile = await _supabase
+        .from('profiles_new')
+        .select('id, role')
+        .eq('username', qualificationData['username'].toString()) // ✅ FIXED
+        .maybeSingle();
+
+    debugPrint('📊 User profile result: $userProfile');
+
+    if (userProfile == null) {
+      return {'success': false, 'error': 'User profile not found. Please sign up first.'};
+    }
+
+    // 3️⃣ Verify user is a mentor
+    if (userProfile['role'] != 'mentor') {
+      return {'success': false, 'error': 'Only users with mentor role can submit qualifications'};
+    }
+
+    // 4️⃣ Prepare qualification data for database
+    final dbData = {
+      'user_id': userProfile['id'],
+      'username': qualificationData['username'].toString(),
+      'email': qualificationData['email'].toString(),
+      'full_name': qualificationData['fullName'].toString(),
+      'profession': qualificationData['profession'].toString(),
+      'company': qualificationData['company']?.toString() ?? '',
+      'years_of_experience': qualificationData['yearsOfExperience'],
+      'education': qualificationData['education'].toString(),
+      'has_mentoring_experience': qualificationData['hasMentoringExperience'] ?? false,
+      'expertise_areas': qualificationData['expertiseAreas'] ?? [],
+      'hours_per_week': qualificationData['hoursPerWeek'],
+      'motivation': qualificationData['motivation']?.toString() ?? '',
+      'submitted_at': DateTime.now().toIso8601String(),
+      'status': 'pending', // pending, approved, rejected
+      'reviewed_by': null,
+      'reviewed_at': null,
+      'admin_notes': null,
+    };
+
+    debugPrint('💾 Saving qualification to database...');
+
+    // 5️⃣ Insert into mentor_qualifications table
+    final qualificationInsert = await _supabase
+        .from('mentor_qualifications')
+        .insert(dbData)
+        .select()
+        .single();
+
+    debugPrint('✅ MENTOR QUALIFICATION SUBMITTED SUCCESSFULLY');
+    debugPrint('   - Qualification ID: ${qualificationInsert['id']}');
+    debugPrint('   - User ID: ${qualificationInsert['user_id']}');
+    debugPrint('   - Status: ${qualificationInsert['status']}');
+
+    // 6️⃣ Update profiles_new to mark as qualification submitted
+    await _supabase
+        .from('profiles_new')
+        .update({
+          'qualification_submitted': true,
+          'qualification_submitted_at': DateTime.now().toIso8601String(),
+        })
+        .eq('id', userProfile['id']);
+
+    debugPrint('📝 Profile updated with qualification submission timestamp');
+
+    return {
+      'success': true,
+      'message': 'Mentor qualification submitted successfully! Please wait for admin approval.',
+      'qualificationId': qualificationInsert['id'],
+      'status': 'pending',
+    };
+
+  } catch (e, st) {
+    debugPrint('💥 ERROR SUBMITTING MENTOR QUALIFICATION: $e');
+    debugPrint('📄 STACK TRACE: $st');
+    
+    // More specific error handling
+    if (e.toString().contains('relation "mentor_qualifications" does not exist')) {
+      return {'success': false, 'error': 'Database table not found. Please create mentor_qualifications table first.'};
+    } else if (e.toString().contains('network') || e.toString().contains('timeout')) {
+      return {'success': false, 'error': 'Network error. Please check your internet connection.'};
+    } else {
+      return {'success': false, 'error': 'Failed to submit qualification: $e'};
+    }
+  }
+}
+
+  // 🔹 CHECK MENTOR QUALIFICATION STATUS - NEW METHOD
+  Future<Map<String, dynamic>> getMentorQualificationStatus(String userId) async {
+    try {
+      debugPrint('🔍 Checking mentor qualification status for user: $userId');
+
+      final qualification = await _supabase
+          .from('mentor_qualifications')
+          .select('*')
+          .eq('user_id', userId)
+          .order('submitted_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+
+      if (qualification == null) {
+        return {'success': true, 'status': 'not_submitted', 'message': 'No qualification submitted yet'};
+      }
+
+      return {
+        'success': true,
+        'status': qualification['status'] ?? 'pending',
+        'qualification': qualification,
+        'message': 'Qualification ${qualification['status']}',
+      };
+    } catch (e) {
+      debugPrint('❌ Error checking qualification status: $e');
+      return {'success': false, 'error': 'Failed to check qualification status: $e'};
+    }
+  }
+
+  // 🔹 GET ALL PENDING QUALIFICATIONS (For Admin) - NEW METHOD
+  Future<Map<String, dynamic>> getPendingMentorQualifications() async {
+    try {
+      debugPrint('📋 Fetching pending mentor qualifications');
+
+      final qualifications = await _supabase
+          .from('mentor_qualifications')
+          .select('''
+            *,
+            profiles_new:user_id (username, email, created_at)
+          ''')
+          .eq('status', 'pending')
+          .order('submitted_at', ascending: true);
+
+      return {
+        'success': true,
+        'qualifications': qualifications,
+        'count': qualifications.length,
+      };
+    } catch (e) {
+      debugPrint('❌ Error fetching pending qualifications: $e');
+      return {'success': false, 'error': 'Failed to fetch pending qualifications: $e'};
+    }
+  }
+
+  // 🔹 UPDATE QUALIFICATION STATUS (For Admin) - NEW METHOD
+  Future<Map<String, dynamic>> updateQualificationStatus({
+    required String qualificationId,
+    required String status,
+    String? adminNotes,
+    required String adminUserId,
+  }) async {
+    try {
+      debugPrint('🔄 Updating qualification status: $qualificationId to $status');
+
+      final updateData = {
+        'status': status,
+        'reviewed_by': adminUserId,
+        'reviewed_at': DateTime.now().toIso8601String(),
+        if (adminNotes != null) 'admin_notes': adminNotes,
+      };
+
+      // Update qualification status
+      final qualificationUpdate = await _supabase
+          .from('mentor_qualifications')
+          .update(updateData)
+          .eq('id', qualificationId)
+          .select()
+          .single();
+
+      // If approved, update the user's profile to approved
+      if (status == 'approved') {
+        await _supabase
+            .from('profiles_new')
+            .update({'is_approved': true})
+            .eq('id', qualificationUpdate['user_id']);
+        
+        debugPrint('✅ User profile approved for mentor role');
+      }
+
+      debugPrint('✅ Qualification status updated successfully');
+
+      return {
+        'success': true,
+        'message': 'Qualification $status successfully',
+        'qualification': qualificationUpdate,
+      };
+    } catch (e) {
+      debugPrint('❌ Error updating qualification status: $e');
+      return {'success': false, 'error': 'Failed to update qualification status: $e'};
+    }
+  }
 }

@@ -71,11 +71,12 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
     try {
       await _loadRoomDetails();
       await _loadMembers();
+      _setupRealtimeSubscriptions(); // ✅ FIXED: Setup real-time BEFORE loading messages
       await _loadMessages();
-      _setupRealtimeSubscriptions();
       _checkIfCreator();
     } catch (e) {
-      _showError('Failed to initialize room: $e');
+      debugPrint('Failed to initialize room: $e');
+      _showError('Failed to initialize room. Please check your connection.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -91,7 +92,7 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
           .timeout(const Duration(seconds: 10));
       if (room != null) _creatorId = room['creator_id'];
     } catch (e) {
-      _showError('Failed to load room details: $e');
+      debugPrint('Failed to load room details: $e');
     }
   }
 
@@ -99,7 +100,7 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
     try {
       final members = await supabase
           .from('room_members')
-          .select('user_id')
+          .select('user_id, joined_at')
           .eq('room_id', widget.roomId)
           .timeout(const Duration(seconds: 10));
 
@@ -119,7 +120,8 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
 
       if (mounted) setState(() {});
     } catch (e) {
-      _showError('Failed to load members: $e');
+      debugPrint('Failed to load members: $e');
+      // Don't show error for members loading - it's not critical
     }
   }
 
@@ -172,51 +174,55 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
   }
 
   void _setupRealtimeSubscriptions() {
-    _messageChannel = supabase.channel('room_${widget.roomId}_messages');
-    
-    _messageChannel!
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'room_messages',
-          filter: PostgresChangeFilter(
-              type: PostgresChangeFilterType.eq,
-              column: 'room_id',
-              value: widget.roomId),
-          callback: (payload) async {
-            try {
-              if (!mounted) return;
-              
-              final newMessage = payload.newRecord;
-              final userId = newMessage['user_id'] as String;
-              final userData = await _fetchUserData(userId);
-              
-              if (mounted) {
-                setState(() {
-                  _messages.add({
-                    ...newMessage,
-                    'sender_name': userData['name'],
-                    'sender_avatar': userData['avatar_url'],
-                  });
-                });
-                
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (_messageScrollController.hasClients) {
-                    _messageScrollController.animateTo(
-                      _messageScrollController.position.maxScrollExtent,
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeOut,
-                    );
-                  }
-                });
+  debugPrint('🔄 Setting up real-time subscriptions for room: ${widget.roomId}');
+  
+  // Unsubscribe from existing channel if any
+  _messageChannel?.unsubscribe();
+
+  _messageChannel = supabase.channel('room_${widget.roomId}_messages');
+  
+  _messageChannel!
+      .onPostgresChanges(
+        event: PostgresChangeEvent.insert,
+        schema: 'public',
+        table: 'room_messages',
+        callback: (payload) async {
+          if (!mounted) return;
+          
+          final newMessage = payload.newRecord;
+          
+          // Filter by room_id
+          if (newMessage['room_id'] != widget.roomId) return;
+          
+          final userId = newMessage['user_id'] as String;
+          final userData = await _fetchUserData(userId);
+          
+          if (mounted) {
+            setState(() {
+              _messages.add({
+                ...newMessage,
+                'sender_name': userData['name'],
+                'sender_avatar': userData['avatar_url'],
+              });
+            });
+            
+            // Auto-scroll to bottom
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (_messageScrollController.hasClients) {
+                _messageScrollController.animateTo(
+                  _messageScrollController.position.maxScrollExtent,
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeOut,
+                );
               }
-            } catch (e) {
-              debugPrint('Error handling real-time message: $e');
-            }
-          },
-        )
-        .subscribe();
-  }
+            });
+          }
+        },
+      )
+      .subscribe();
+
+  debugPrint('✅ Real-time subscription setup completed');
+}
 
   Future<void> _fetchUserBatch(List<String> userIds) async {
     if (userIds.isEmpty) return;
@@ -289,9 +295,32 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return;
 
+    // ✅ IMPROVED: Store message temporarily for better UX
+    final tempMessage = {
+      'id': 'temp_${DateTime.now().millisecondsSinceEpoch}',
+      'room_id': widget.roomId,
+      'user_id': userId,
+      'content': content,
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+      'sender_name': _getCurrentUserName(supabase.auth.currentUser!),
+      'sender_avatar': '',
+    };
+
     // Clear input immediately for better UX
     setState(() {
       _messageController.clear();
+      _messages.add(tempMessage);
+      
+      // Scroll to bottom
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_messageScrollController.hasClients) {
+          _messageScrollController.animateTo(
+            _messageScrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
+      });
     });
 
     try {
@@ -301,8 +330,21 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
         'content': content,
         'created_at': DateTime.now().toUtc().toIso8601String(),
       }).timeout(const Duration(seconds: 10));
+      
+      // ✅ Remove temporary message - real-time will add the actual one
+      setState(() {
+        _messages.removeWhere((msg) => msg['id'].toString().startsWith('temp_'));
+      });
+      
     } catch (e) {
       if (!mounted) return;
+      
+      // ✅ Show error and restore message
+      setState(() {
+        _messages.removeWhere((msg) => msg['id'].toString().startsWith('temp_'));
+        _messageController.text = content; // Restore message
+      });
+      
       _showError('Failed to send message. Please check your connection.');
     }
   }
@@ -340,57 +382,60 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
     }
   }
 
-  String _getCurrentUserName(User currentUser) {
-  try {
-    final username = currentUser.userMetadata?['username']?.toString();
-    final emailName = currentUser.email?.split('@').first;
-    
-    if (username != null && username.isNotEmpty) return username;
-    if (emailName != null && emailName.isNotEmpty) return emailName;
-    return 'Mentee';
-  } catch (e) {
-    return 'Mentee';
-  }
-}
-
-Future<void> _handleInviteResult(dynamic result, User currentUser) async {
-  if (result == null || result is! Map<String, dynamic>) {
-    debugPrint('Mentor invitation cancelled');
-    return;
+  // ✅ ADD: Helper method to get current user name
+  String _getCurrentUserName(User user) {
+    try {
+      final username = user.userMetadata?['username']?.toString();
+      final emailName = user.email?.split('@').first;
+      final name = user.userMetadata?['name']?.toString();
+      
+      if (username != null && username.isNotEmpty) return username;
+      if (name != null && name.isNotEmpty) return name;
+      if (emailName != null && emailName.isNotEmpty) return emailName;
+      return 'User';
+    } catch (e) {
+      return 'User';
+    }
   }
 
-  try {
-    final String roomId = result['roomId']?.toString() ?? '';
-    final String roomName = result['roomName']?.toString() ?? 'Live Session';
-
-    if (roomId.isEmpty) {
-      _showError('Failed to create collaboration room');
+  Future<void> _handleInviteResult(dynamic result, User currentUser) async {
+    if (result == null || result is! Map<String, dynamic>) {
+      debugPrint('Mentor invitation cancelled');
       return;
     }
 
-    if (!mounted) return;
+    try {
+      final String roomId = result['roomId']?.toString() ?? '';
+      final String roomName = result['roomName']?.toString() ?? 'Live Session';
 
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => CollabRoomTabs(
-          roomId: roomId,
-          roomName: roomName,
-          menteeId: currentUser.id,
-          mentorId: result['mentorId']?.toString() ?? '',
-          isMentor: false, 
-          sessionId: roomId,
+      if (roomId.isEmpty) {
+        _showError('Failed to create collaboration room');
+        return;
+      }
+
+      if (!mounted) return;
+
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CollabRoomTabs(
+            roomId: roomId,
+            roomName: roomName,
+            menteeId: currentUser.id,
+            mentorId: result['mentorId']?.toString() ?? '',
+            isMentor: false, 
+            sessionId: roomId,
+          ),
         ),
-      ),
-    );
+      );
 
-  } catch (e, stack) {
-    debugPrint('Error handling invite result: $e\n$stack');
-    if (mounted) {
-      _showError('Failed to process invitation.');
+    } catch (e, stack) {
+      debugPrint('Error handling invite result: $e\n$stack');
+      if (mounted) {
+        _showError('Failed to process invitation.');
+      }
     }
   }
-}
 
   void _showError(String message) {
     if (mounted) {
@@ -888,8 +933,7 @@ Future<void> _handleInviteResult(dynamic result, User currentUser) async {
   void dispose() {
     _messageController.dispose();
     _messageScrollController.dispose();
-    _messageChannel?.unsubscribe();
-    supabase.removeAllChannels();
+    _messageChannel?.unsubscribe(); // ✅ FIXED: Remove removeAllChannels()
     super.dispose();
   }
 

@@ -11,7 +11,7 @@ class LiveLobbyService {
       print('🟡 fetchMentors: Fetching mentors from profiles_new...');
       
       final response = await _supabase
-          .from('profiles_new') // FIXED: Changed from 'profiles' to 'profiles_new'
+          .from('profiles_new')
           .select('id, username, avatar_url, role, online_status')
           .eq('role', 'mentor')
           .order('username');
@@ -29,7 +29,8 @@ class LiveLobbyService {
   Future<Map<String, dynamic>?> createLiveSession(
     String menteeId,
     String mentorId,
-    String menteeName, // FIXED: Added menteeName parameter
+    String menteeName, 
+    {String message = ''}
   ) async {
     try {
       print('🟡 createLiveSession: Starting for mentee: $menteeId, mentor: $mentorId');
@@ -108,6 +109,7 @@ class LiveLobbyService {
         'mentor_id': mentorId,
         'mentee_id': menteeId,
         'mentee_name': finalMenteeName,
+        'message': message,
         'status': 'pending',
         'created_at': DateTime.now().toUtc().toIso8601String(),
       });
@@ -161,14 +163,7 @@ class LiveLobbyService {
       
       final response = await _supabase
           .from('live_invitations')
-          .select('''
-            id, 
-            session_id, 
-            mentee_name, 
-            status, 
-            created_at,
-            live_sessions!inner(room_id, room:rooms(name))
-          ''')
+          .select('*')
           .eq('mentor_id', mentorId)
           .eq('status', 'pending')
           .order('created_at', ascending: false);

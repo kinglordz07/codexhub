@@ -271,7 +271,7 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
             isMentor: isMentor,
             mentorId: mentorId,
             menteeId: menteeId,
-            sessionId: sessionId, // ✅ ADDED: Critical parameter
+            sessionId: sessionId,
           ),
         ),
       );

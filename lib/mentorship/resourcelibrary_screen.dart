@@ -22,11 +22,11 @@ class _ResourceLibraryScreenState extends State<ResourceLibraryScreen>
   List<Map<String, dynamic>> _resources = [];
   List<Map<String, dynamic>> _uploadedFiles = [];
   List<Map<String, dynamic>> _videoUrls = [];
-  List<Map<String, dynamic>> _quizzes = []; // ADDED: Quizzes list
+  List<Map<String, dynamic>> _quizzes = []; 
   bool _isLoading = true;
   bool _isLoadingFiles = true;
   bool _isLoadingVideos = true;
-  bool _isLoadingQuizzes = true; // ADDED: Quiz loading state
+  bool _isLoadingQuizzes = true; 
   int _currentTabIndex = 0;
 
   // Get current user info
@@ -46,12 +46,12 @@ class _ResourceLibraryScreenState extends State<ResourceLibraryScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this); // CHANGED: 3 to 4 tabs
+    _tabController = TabController(length: 4, vsync: this);
     _tabController.addListener(_handleTabChange);
     _loadResources();
     _loadUploadedFiles();
     _loadVideoUrls();
-    _loadQuizzes(); // ADDED: Load quizzes
+    _loadQuizzes(); 
     _ensureStorageBucket();
   }
 
@@ -121,6 +121,60 @@ class _ResourceLibraryScreenState extends State<ResourceLibraryScreen>
       _resources = [];
       _isLoading = false;
     });
+  }
+}
+
+void _editQuiz(Map<String, dynamic> quiz) {
+  showDialog(
+    context: context,
+    builder: (context) => QuizEditDialog(
+      quiz: quiz,
+      currentUserId: _currentUserId,
+      onQuizUpdated: (updatedQuiz) async {
+        await _updateQuizInDatabase(updatedQuiz);
+        await _loadQuizzes();
+      },
+    ),
+  );
+}
+
+Future<void> _updateQuizInDatabase(Map<String, dynamic> updatedQuiz) async {
+  try {
+    debugPrint('💾 Updating quiz in database...');
+    
+    // Prepare update data
+    final Map<String, dynamic> updateData = {
+      'question': updatedQuiz['question'],
+      'category': updatedQuiz['category'],
+      'answers': updatedQuiz['answers'],
+      'correct_answers': updatedQuiz['correct_answers'],
+      'updated_at': DateTime.now().toIso8601String(),
+    };
+
+    await supabase
+        .from('quizzes')
+        .update(updateData)
+        .eq('id', updatedQuiz['id'])
+        .eq('user_id', _currentUserId);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('✅ Quiz question updated successfully!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  } catch (e) {
+    debugPrint('❌ Error updating quiz: $e');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('❌ Error updating quiz: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 }
 
@@ -197,7 +251,6 @@ Future<void> _loadVideoUrls() async {
   }
 }
 
-// FIXED: Load quizzes - no need for profile joining
 Future<void> _loadQuizzes() async {
   try {
     debugPrint('🔄 Loading quizzes from quizzes table...');
@@ -206,7 +259,7 @@ Future<void> _loadQuizzes() async {
       _isLoadingQuizzes = true;
     });
 
-    // Simple query - no need for profile joining
+    // Load quizzes, including grouped ones
     final response = await supabase
         .from('quizzes')
         .select('*')
@@ -259,63 +312,77 @@ Future<void> _loadQuizzes() async {
   }
 
   void _createNewQuiz() {
-    showDialog(
-      context: context,
-      builder: (context) => QuizCreationDialog(
-        currentUserId: _currentUserId,
-        onQuizCreated: (newQuiz) async {
-          await _saveQuizToDatabase(newQuiz);
-          await _loadQuizzes(); // ADDED: Refresh quizzes after creation
-        },
-      ),
-    );
-  }
+  showDialog(
+    context: context,
+    builder: (context) => QuizCreationDialog(
+      currentUserId: _currentUserId,
+      onQuizCreated: (Map<String, dynamic> newQuiz) async {
+        await _saveQuizGroupToDatabase(newQuiz); 
+        await _loadQuizzes(); 
+      },
+    ),
+  );
+}
 
-  Future<void> _saveQuizToDatabase(Map<String, dynamic> quiz) async {
+  Future<void> _saveQuizGroupToDatabase(Map<String, dynamic> quizGroup) async {
   try {
-    debugPrint('💾 Saving quiz to database for current user...');
-
-    // Prepare the correct answers
-    List<String> correctAnswerTexts = [];
-    for (int i = 0; i < quiz['correct_answers'].length; i++) {
-      if (quiz['correct_answers'][i] == true) {
-        correctAnswerTexts.add(quiz['answers'][i]);
-      }
-    }
+    debugPrint('💾 Saving quiz group to database for current user...');
 
     // Get current user's username for created_by field
     final currentUser = _currentUser;
     final createdBy = currentUser?.email?.split('@').first ?? 'User';
 
-    // Prepare quiz data - match your table structure
-    final Map<String, dynamic> quizData = {
-      'question': quiz['question'],
-      'category': quiz['category'],
-      'answers': quiz['answers'],
-      'correct_answers': correctAnswerTexts,
-      'difficulty': quiz['difficulty'],
-      'user_id': _currentUserId,
-      'created_by': createdBy, // ADD THIS
-      'is_active': true,
-      'created_at': DateTime.now().toIso8601String(),
-    };
+    // Save each question individually to the existing quizzes table
+    final List<dynamic> questions = quizGroup['questions'] as List<dynamic>;
+    
+    for (int i = 0; i < questions.length; i++) {
+      final question = questions[i] as Map<String, dynamic>;
+      
+      // Prepare the correct answers for multiple choice questions
+      List<String> correctAnswerTexts = [];
+      if (question['type'] == 'multiple_choice') {
+        final List<dynamic> correctAnswers = question['correct_answers'] as List<dynamic>;
+        final List<dynamic> answers = question['answers'] as List<dynamic>;
+        
+        for (int j = 0; j < correctAnswers.length; j++) {
+          if (correctAnswers[j] == true) {
+            correctAnswerTexts.add(answers[j].toString());
+          }
+        }
+      }
 
-    debugPrint('📦 Quiz data to insert: $quizData');
+      // Prepare quiz data
+      final Map<String, dynamic> quizData = {
+        'question': question['question'].toString(),
+        'category': quizGroup['category'].toString(),
+        'answers': question['type'] == 'multiple_choice' ? question['answers'] : [],
+        'correct_answers': correctAnswerTexts,
+        'difficulty': question['difficulty'].toString(),
+        'user_id': _currentUserId,
+        'created_by': createdBy,
+        'quiz_group_name': quizGroup['name'].toString(), 
+        'question_type': question['type'].toString(),
+        'question_order': i, 
+        'is_active': true,
+        'created_at': DateTime.now().toIso8601String(),
+      };
 
-    final response = await supabase.from('quizzes').insert(quizData).select();
+      debugPrint('📦 Saving question ${i + 1}: ${question['question']}');
+      await supabase.from('quizzes').insert(quizData);
+    }
 
-    debugPrint('✅ Quiz saved successfully! Response: $response');
+    debugPrint('✅ Quiz group saved successfully! ${questions.length} questions created.');
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('✅ Quiz question "${quiz['question']}" created successfully!'),
+          content: Text('✅ Quiz "${quizGroup['name']}" created successfully with ${questions.length} questions!'),
           backgroundColor: Colors.green,
         ),
       );
     }
   } catch (e) {
-    debugPrint('❌ Error saving quiz to database: $e');
+    debugPrint('❌ Error saving quiz group to database: $e');
     
     if (e is PostgrestException) {
       debugPrint('📋 Postgrest Error Details:');
@@ -591,29 +658,30 @@ ${hasAttachment ? '📎 Attached File: $fileName' : ''}
       debugPrint('✅ DATABASE INSERT SUCCESSFUL');
       debugPrint('📊 Response: $response');
 
-      // Update the resource to mark it as uploaded to Learning Tools
-      if (resource['id'] != null && resource['id'] is int && resource['id'] > 0) {
-        debugPrint('🔄 Updating resource with ID: ${resource['id']}');
-        
-        final updateResponse = await supabase
-            .from('resources')
-            .update({
-              'is_uploaded_to_learning_tools': true,
-            })
-            .eq('id', resource['id'])
-            .eq('user_id', _currentUserId)
-            .select();
+      // In your _uploadToArticlesTable method, update the resource update section:
+if (resource['id'] != null && resource['id'] is int && resource['id'] > 0) {
+  debugPrint('🔄 Updating resource with ID: ${resource['id']}');
+  
+  final updateResponse = await supabase
+      .from('resources')
+      .update({
+        'is_uploaded_to_learning_tools': true,
+        'uploaded_to_learning_tools_at': DateTime.now().toIso8601String(), // Set timestamp when uploading
+      })
+      .eq('id', resource['id'])
+      .eq('user_id', _currentUserId)
+      .select();
 
-        debugPrint('✅ Resource update response: $updateResponse');
-        
-        if (updateResponse.isNotEmpty) {
-          debugPrint('🎉 Successfully marked resource as uploaded to Learning Tools');
-        } else {
-          debugPrint('⚠️ Resource update might have failed - no rows returned');
-        }
-      } else {
-        debugPrint('⚠️ Cannot update resource - invalid ID: ${resource['id']}');
-      }
+  debugPrint('✅ Resource update response: $updateResponse');
+  
+  if (updateResponse.isNotEmpty) {
+    debugPrint('🎉 Successfully marked resource as uploaded to Learning Tools');
+  } else {
+    debugPrint('⚠️ Resource update might have failed - no rows returned');
+  }
+} else {
+  debugPrint('⚠️ Cannot update resource - invalid ID: ${resource['id']}');
+}
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -758,7 +826,6 @@ Future<void> _uploadVideoToLearningTools(Map<String, dynamic> video) async {
   }
 }
 
-  // Delete video function
   void _markVideoAsRemoved(Map<String, dynamic> video) async {
     final bool? confirm = await showDialog(
       context: context,
@@ -785,7 +852,7 @@ Future<void> _uploadVideoToLearningTools(Map<String, dynamic> video) async {
 
     if (confirm == true) {
       try {
-        // Hard delete - permanently remove from video_urls table
+
         await supabase
             .from('video_urls')
             .delete()
@@ -817,7 +884,6 @@ Future<void> _uploadVideoToLearningTools(Map<String, dynamic> video) async {
     }
   }
 
-  // FIXED: Delete quiz function
 void _markQuizAsRemoved(Map<String, dynamic> quiz) async {
   final bool? confirm = await showDialog(
     context: context,
@@ -913,6 +979,36 @@ void _markQuizAsRemoved(Map<String, dynamic> quiz) async {
     debugPrint('❌ Error getting uploader name: $e');
     return 'Unknown User';
   }
+}
+
+int _getAnswerCount(Map<String, dynamic> quiz) {
+  try {
+    if (quiz['answers'] is List) {
+      return (quiz['answers'] as List).length;
+    }
+    return 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+// Helper method to get correct answer count
+int _getCorrectAnswerCount(Map<String, dynamic> quiz) {
+  try {
+    if (quiz['correct_answers'] is List) {
+      return (quiz['correct_answers'] as List).length;
+    }
+    return 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+// Helper method to get question type display
+String _getQuestionType(Map<String, dynamic> quiz) {
+  final type = quiz['question_type']?.toString().toLowerCase() ?? 'multiple_choice';
+  if (type == 'essay') return 'Essay';
+  return 'Multiple Choice';
 }
 
   // Helper for video uploader display name
@@ -1318,8 +1414,8 @@ void _openYoutubeVideo(String youtubeUrl) async {
                       leading: _getFileIcon(fileExtension, size: isSmallScreen ? 32 : 40),
                       trailing: IconButton(
                         icon: Icon(
-                          Icons.delete_outline,
-                          color: Colors.red,
+                          Icons.remove_circle,
+                          color: Colors.orange,
                           size: isSmallScreen ? 18 : 20,
                         ),
                         onPressed: () {
@@ -1519,187 +1615,261 @@ void _openYoutubeVideo(String youtubeUrl) async {
     );
   }
 
-  // ADDED: Quiz tab with delete functionality
-  Widget _buildQuizzesTab() {
-    final screenSize = MediaQuery.of(context).size;
-    final isSmallScreen = screenSize.width < 600;
+ Widget _buildQuizzesTab() {
+  final screenSize = MediaQuery.of(context).size;
+  final isSmallScreen = screenSize.width < 600;
 
-    if (_isLoadingQuizzes) {
-      return Center(child: CircularProgressIndicator());
-    }
+  if (_isLoadingQuizzes) {
+    return Center(child: CircularProgressIndicator());
+  }
 
-    if (_quizzes.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: EdgeInsets.all(isSmallScreen ? 20 : 32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.quiz, size: isSmallScreen ? 60 : 80, color: Colors.grey[400]),
-              SizedBox(height: isSmallScreen ? 12 : 16),
-              Text(
-                'No Quiz Questions Yet',
-                style: TextStyle(
-                  fontSize: isSmallScreen ? 16 : 18,
-                  color: Colors.grey[600],
-                ),
-                textAlign: TextAlign.center,
+  if (_quizzes.isEmpty) {
+    return Center(
+      child: Padding(
+        padding: EdgeInsets.all(isSmallScreen ? 20 : 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.quiz, size: isSmallScreen ? 60 : 80, color: Colors.grey[400]),
+            SizedBox(height: isSmallScreen ? 12 : 16),
+            Text(
+              'No Quiz Questions Yet',
+              style: TextStyle(
+                fontSize: isSmallScreen ? 16 : 18,
+                color: Colors.grey[600],
               ),
-              SizedBox(height: isSmallScreen ? 8 : 12),
-              Text(
-                'Create your first quiz question using the + button in Resources tab',
-                style: TextStyle(
-                  fontSize: isSmallScreen ? 12 : 14,
-                  color: Colors.grey[500],
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    return ListView.builder(
-      padding: EdgeInsets.symmetric(
-        vertical: isSmallScreen ? 8 : 12,
-        horizontal: isSmallScreen ? 8 : 16,
-      ),
-      itemCount: _quizzes.length,
-      itemBuilder: (context, index) {
-        final quiz = _quizzes[index];
-        final creatorName = _getQuizCreatorDisplayName(quiz);
-        final isOwnQuiz = quiz['user_id'] == _currentUserId;
-        final correctAnswers = quiz['correct_answers'] is List ? quiz['correct_answers'] as List<dynamic> : [];
-        final answers = quiz['answers'] is List ? quiz['answers'] as List<dynamic> : [];
-
-        
-      // ✅ DITO ILALAGAY ANG DEBUG PRINT (LINE 1033-1037)
-      debugPrint('📊 Building quiz ${quiz['id']}:');
-      debugPrint('   - Question: ${quiz['question']}');
-      debugPrint('   - User ID: ${quiz['user_id']}');
-      debugPrint('   - Profile Data: ${quiz['profiles_new']}');
-      debugPrint('   - Creator Name: $creatorName');
-
-        return Card(
-          margin: EdgeInsets.symmetric(vertical: isSmallScreen ? 6 : 8),
-          elevation: 5,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: ListTile(
-            contentPadding: EdgeInsets.all(isSmallScreen ? 12 : 16),
-            leading: Container(
-              width: isSmallScreen ? 50 : 60,
-              height: isSmallScreen ? 50 : 60,
-              decoration: BoxDecoration(
-                color: Colors.purple[100],
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(Icons.quiz, color: Colors.purple, size: isSmallScreen ? 24 : 30),
+              textAlign: TextAlign.center,
             ),
-            title: Row(
-              children: [
-                Expanded(
-                  child: Text(
+            SizedBox(height: isSmallScreen ? 8 : 12),
+            Text(
+              'Create your first quiz question using the + button in Resources tab',
+              style: TextStyle(
+                fontSize: isSmallScreen ? 12 : 14,
+                color: Colors.grey[500],
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Group quizzes by quiz_group_name
+  final Map<String, List<Map<String, dynamic>>> groupedQuizzes = {};
+  
+  for (final quiz in _quizzes) {
+    final groupName = quiz['quiz_group_name']?.toString() ?? 'Individual Questions';
+    if (!groupedQuizzes.containsKey(groupName)) {
+      groupedQuizzes[groupName] = [];
+    }
+    groupedQuizzes[groupName]!.add(quiz);
+  }
+
+  // Convert to list of groups for easier rendering
+  final List<MapEntry<String, List<Map<String, dynamic>>>> quizGroups = 
+      groupedQuizzes.entries.toList()
+        ..sort((a, b) => a.key.compareTo(b.key));
+
+  return ListView.builder(
+    padding: EdgeInsets.symmetric(
+      vertical: isSmallScreen ? 8 : 12,
+      horizontal: isSmallScreen ? 8 : 16,
+    ),
+    itemCount: quizGroups.length,
+    itemBuilder: (context, groupIndex) {
+      final groupEntry = quizGroups[groupIndex];
+      final groupName = groupEntry.key;
+      final groupQuizzes = groupEntry.value;
+      final isIndividualGroup = groupName == 'Individual Questions';
+ 
+
+      return Card(
+        margin: EdgeInsets.symmetric(vertical: isSmallScreen ? 8 : 12),
+        elevation: 5,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Group Header
+            Container(
+              width: double.infinity,
+              padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+              decoration: BoxDecoration(
+                color: Colors.purple[50],
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(12),
+                  topRight: Radius.circular(12),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    isIndividualGroup ? Icons.question_answer : Icons.quiz,
+                    color: Colors.purple[800],
+                    size: isSmallScreen ? 20 : 24,
+                  ),
+                  SizedBox(width: isSmallScreen ? 8 : 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          groupName,
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: isSmallScreen ? 16 : 18,
+                            color: Colors.purple[800],
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          '${groupQuizzes.length} question${groupQuizzes.length > 1 ? 's' : ''} • '
+                          '${_getGroupQuestionTypes(groupQuizzes)}',
+                          style: TextStyle(
+                            fontSize: isSmallScreen ? 12 : 14,
+                            color: Colors.purple[600],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                ],
+              ),
+            ),
+            
+            // Questions in this group
+            ...groupQuizzes.asMap().entries.map((entry) {
+              final index = entry.key;
+              final quiz = entry.value;
+              final creatorName = _getQuizCreatorDisplayName(quiz);
+              final isOwnQuiz = quiz['user_id'] == _currentUserId;
+              final answerCount = _getAnswerCount(quiz);
+              final correctAnswerCount = _getCorrectAnswerCount(quiz);
+              final questionType = _getQuestionType(quiz);
+
+              return Container(
+                decoration: BoxDecoration(
+                  border: index < groupQuizzes.length - 1 
+                      ? Border(bottom: BorderSide(color: Colors.grey[200]!))
+                      : null,
+                ),
+                child: ListTile(
+                  contentPadding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+                  leading: Container(
+                    width: isSmallScreen ? 40 : 48,
+                    height: isSmallScreen ? 40 : 48,
+                    decoration: BoxDecoration(
+                      color: _getQuestionTypeColor(questionType),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Center(
+                      child: Text(
+                        '${index + 1}',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          fontSize: isSmallScreen ? 14 : 16,
+                        ),
+                      ),
+                    ),
+                  ),
+                  title: Text(
                     quiz['question'] ?? 'Untitled Question',
                     style: TextStyle(
-                      fontWeight: FontWeight.bold,
+                      fontWeight: FontWeight.w600,
                       fontSize: isSmallScreen ? 14 : 16,
                     ),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
-                ),
-                // Difficulty badge
-                Container(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: isSmallScreen ? 4 : 6,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: _getDifficultyColor(quiz['difficulty']),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    quiz['difficulty'] ?? 'Medium',
-                    style: TextStyle(
-                      fontSize: isSmallScreen ? 8 : 10,
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (quiz['category'] != null)
-                  Text(
-                    "Category: ${quiz['category']}",
-                    style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
-                  ),
-                Text(
-                  "Answers: ${answers.length} options, ${correctAnswers.length} correct",
-                  style: TextStyle(fontSize: isSmallScreen ? 11 : 12, color: Colors.grey),
-                ),
-                SizedBox(height: 4),
-                Row(
-                  children: [
-                    Icon(Icons.person, size: 12, color: Colors.grey),
-                    SizedBox(width: 4),
-                    Text(
-                      'By: $creatorName',
-                      style: TextStyle(fontSize: 12, color: Colors.grey),
-                    ),
-                  ],
-                ),
-                if (quiz['created_at'] != null) ...[
-                  SizedBox(height: 2),
-                  Row(
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.calendar_today, size: 12, color: Colors.grey),
-                      SizedBox(width: 4),
+                      if (quiz['category'] != null && isIndividualGroup)
+                        Text(
+                          "Category: ${quiz['category']}",
+                          style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
+                        ),
                       Text(
-                        'Created: ${_formatDate(quiz['created_at'])}',
-                        style: TextStyle(fontSize: 11, color: Colors.grey),
+                        questionType == 'Essay' 
+                            ? "Essay Question"
+                            : "$answerCount options, $correctAnswerCount correct",
+                        style: TextStyle(fontSize: isSmallScreen ? 11 : 12, color: Colors.grey),
+                      ),
+                      SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(Icons.person, size: 12, color: Colors.grey),
+                          SizedBox(width: 4),
+                          Text(
+                            'By: $creatorName',
+                            style: TextStyle(fontSize: 12, color: Colors.grey),
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                ],
-              ],
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // DELETE BUTTON - only show for own quizzes
-                if (isOwnQuiz)
-                  IconButton(
-                    icon: Icon(Icons.delete_outline, color: Colors.red, size: isSmallScreen ? 18 : 20),
-                    onPressed: () {
-                      _markQuizAsRemoved(quiz);
-                    },
-                    tooltip: 'Delete Quiz',
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // EDIT BUTTON - only show for own quizzes
+                      if (isOwnQuiz)
+                        IconButton(
+                          icon: Icon(Icons.edit, color: Colors.blue, size: isSmallScreen ? 18 : 20),
+                          onPressed: () {
+                            _editQuiz(quiz);
+                          },
+                          tooltip: 'Edit Question',
+                        ),
+                      // DELETE BUTTON - only show for own quizzes
+                      if (isOwnQuiz)
+                        IconButton(
+                          icon: Icon(Icons.delete_outline, color: Colors.red, size: isSmallScreen ? 18 : 20),
+                          onPressed: () {
+                            _markQuizAsRemoved(quiz);
+                          },
+                          tooltip: 'Delete Question',
+                        ),
+                    ],
                   ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
+                ),
+              );
+            }),
+          ],
+        ),
+      );
+    },
+  );
+}
 
-  // ADDED: Helper method for difficulty color
-  Color _getDifficultyColor(String? difficulty) {
-    switch (difficulty?.toLowerCase()) {
-      case 'easy':
-        return Colors.green;
-      case 'hard':
-        return Colors.red;
-      case 'medium':
-      default:
-        return Colors.orange;
-    }
+// Helper method to get question type display with color
+Color _getQuestionTypeColor(String questionType) {
+  switch (questionType.toLowerCase()) {
+    case 'essay':
+      return Colors.orange;
+    case 'multiple_choice':
+    default:
+      return Colors.purple;
   }
+}
+
+// Helper method to get group question types summary
+String _getGroupQuestionTypes(List<Map<String, dynamic>> groupQuizzes) {
+  final multipleChoiceCount = groupQuizzes.where((q) => _getQuestionType(q) == 'Multiple Choice').length;
+  final essayCount = groupQuizzes.where((q) => _getQuestionType(q) == 'Essay').length;
+  
+  final parts = <String>[];
+  if (multipleChoiceCount > 0) {
+    parts.add('$multipleChoiceCount MC');
+  }
+  if (essayCount > 0) {
+    parts.add('$essayCount Essay');
+  }
+  
+  return parts.join(' • ');
+}
 
   Icon _getFileIcon(String extension, {double size = 40}) {
     switch (extension) {
@@ -1767,67 +1937,80 @@ void _openYoutubeVideo(String youtubeUrl) async {
   }
 
   void _markFileAsRemoved(Map<String, dynamic> file) async {
-    final bool? confirm = await showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Remove from Learning Tools'),
-        content: Text(
-          'Are you sure you want to remove "${file['title'] ?? file['file_name']}" from Learning Tools? This will also remove it from your resources.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: Text(
-              'Remove',
-              style: TextStyle(color: Colors.red),
-            ),
-          ),
-        ],
+  final bool? confirm = await showDialog(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text('Remove from Learning Tools'),
+      content: Text(
+        'Are you sure you want to remove "${file['title'] ?? file['file_name']}" from Learning Tools? This will NOT remove it from your Resources library.',
       ),
-    );
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          child: Text(
+            'Remove',
+            style: TextStyle(color: Colors.orange),
+          ),
+        ),
+      ],
+    ),
+  );
 
-    if (confirm == true) {
-      try {
-        // Mark the resource as removed (this will remove it from both resources and uploaded files)
-        await supabase
-            .from('resources')
-            .update({
-              'is_removed': true,
-              'is_uploaded_to_learning_tools': false, // Also remove from learning tools
-              'removed_at': DateTime.now().toIso8601String(),
-            })
-            .eq('id', file['id'])
-            .eq('user_id', _currentUserId);
+  if (confirm == true) {
+    try {
+      debugPrint('🔄 Removing file from Learning Tools: ${file['title']}');
+      
+      // ONLY remove from Learning Tools, don't mark as removed from resources
+      final updateResponse = await supabase
+          .from('resources')
+          .update({
+            'is_uploaded_to_learning_tools': false, // Remove from learning tools
+            'uploaded_to_learning_tools_at': null, // Clear the upload timestamp
+          })
+          .eq('id', file['id'])
+          .eq('user_id', _currentUserId)
+          .select();
 
-        // Refresh both lists
-        await _loadResources();
-        await _loadUploadedFiles();
+      debugPrint('✅ Update response: $updateResponse');
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('✅ File removed from Learning Tools and Resources'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-      } catch (e) {
-        debugPrint('❌ Error removing file: $e');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('❌ Error removing file: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+      // Refresh both lists
+      await _loadResources();
+      await _loadUploadedFiles();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ File removed from Learning Tools but kept in Resources'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('❌ Error removing file from Learning Tools: $e');
+      
+      // More detailed error logging
+      if (e is PostgrestException) {
+        debugPrint('📋 Postgrest Error Details:');
+        debugPrint('   - Message: ${e.message}');
+        debugPrint('   - Code: ${e.code}');
+        debugPrint('   - Details: ${e.details}');
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Error removing file: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -1849,26 +2032,26 @@ void _openYoutubeVideo(String youtubeUrl) async {
           tabs: [
             Tab(
               icon: Icon(Icons.library_books),
-              text: isVerySmallScreen ? 'Resources' : 'My Resources',
+              text: isVerySmallScreen ? 'Resources' : 'Resources',
             ),
             Tab(
               icon: Icon(Icons.attach_file),
               text: isVerySmallScreen 
                   ? 'Uploaded (${_uploadedFiles.length})'
-                  : 'Uploaded to Learning Tools (${_uploadedFiles.length})',
+                  : 'Uploaded (${_uploadedFiles.length})',
             ),
             Tab(
               icon: Icon(Icons.video_library),
               text: isVerySmallScreen 
                   ? 'Videos (${_videoUrls.length})'
-                  : 'Video Tutorials (${_videoUrls.length})',
+                  : 'Video (${_videoUrls.length})',
             ),
             // ADDED: Quizzes tab
             Tab(
               icon: Icon(Icons.quiz),
               text: isVerySmallScreen 
                   ? 'Quizzes (${_quizzes.length})'
-                  : 'Quiz Questions (${_quizzes.length})',
+                  : 'Quiz (${_quizzes.length})',
             ),
           ],
         ),
@@ -1880,7 +2063,7 @@ void _openYoutubeVideo(String youtubeUrl) async {
             _buildResourceLibraryTab(), 
             _buildUploadedFilesTab(),
             _buildVideoTutorialsTab(),
-            _buildQuizzesTab() // ADDED: Quizzes tab
+            _buildQuizzesTab() 
           ],
         ),
       ),
@@ -1908,7 +2091,7 @@ void _openYoutubeVideo(String youtubeUrl) async {
               ],
             )
           : _currentTabIndex == 2
-              ? FloatingActionButton( // Video FAB for video tab
+              ? FloatingActionButton( 
                   onPressed: _addNewVideoUrl,
                   backgroundColor: Colors.red,
                   tooltip: 'Add Video Tutorial',
@@ -1920,7 +2103,6 @@ void _openYoutubeVideo(String youtubeUrl) async {
   }
 }
 
-// ADDED: Video URL Dialog class
 class AddVideoUrlDialog extends StatefulWidget {
   final Function(Map<String, dynamic>) onVideoAdded;
   final String currentUserId;
@@ -2335,17 +2517,15 @@ Future<bool> _requestFilePermissions() async {
         
         return allGranted;
       } else {
-        // Android < 13 - use storage permission
         final storageStatus = await Permission.storage.request();
         return storageStatus.isGranted;
       }
     } else if (Platform.isIOS) {
-      // iOS - request photos permission
       final photosStatus = await Permission.photos.request();
       return photosStatus.isGranted;
     }
     
-    return true; // For other platforms
+    return true; 
   } catch (e) {
     debugPrint('❌ Permission error: $e');
     return false;
@@ -2583,7 +2763,7 @@ Future<bool> _requestFilePermissions() async {
   }
 }
 
-// Keep your existing QuizCreationDialog class as is
+
 class QuizCreationDialog extends StatefulWidget {
   final Function(Map<String, dynamic>) onQuizCreated;
   final String currentUserId;
@@ -2598,149 +2778,394 @@ class QuizCreationDialog extends StatefulWidget {
   State<QuizCreationDialog> createState() => _QuizCreationDialogState();
 }
 
+
+
+
+
 class _QuizCreationDialogState extends State<QuizCreationDialog> {
   final _formKey = GlobalKey<FormState>();
-  final _questionController = TextEditingController();
-  final List<TextEditingController> _answerControllers = [
-    TextEditingController(),
-    TextEditingController(),
-    TextEditingController(),
-    TextEditingController(),
-  ];
-  final List<bool> _correctAnswers = [false, false, false, false];
-  String _difficulty = 'Medium';
-   final String _selectedCategory = 'Python';
-   String? _customCategory;
+  String _selectedCategory = 'Python';
+  String? _customCategory;
+  final TextEditingController _quizNameController = TextEditingController();
+  final List<QuizQuestionData> _questions = [];
+  bool _isSubmitting = false;
 
   @override
-  void dispose() {
-    _questionController.dispose();
-    for (var controller in _answerControllers) {
-      controller.dispose();
-    }
-    super.dispose();
+  void initState() {
+    super.initState();
+    _initializeQuestions();
   }
 
-  void _createQuiz() {
-    if (_formKey.currentState!.validate()) {
-      // Validate that at least one answer is marked as correct
-      if (!_correctAnswers.contains(true)) {
+  void _initializeQuestions() {
+    _questions.clear();
+    for (int i = 0; i < 3; i++) {
+      _questions.add(QuizQuestionData(
+        question: '',
+        answers: ['', '', '', ''],
+        correctAnswers: [false, false, false, false],
+        type: 'multiple_choice',
+      ));
+    }
+  }
+
+  void _createQuiz() async {
+  if (_isSubmitting) return;
+  
+  if (_formKey.currentState!.validate()) {
+    // Validate quiz metadata
+    if (_quizNameController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Please enter a quiz name'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // Validate all questions
+    for (int i = 0; i < _questions.length; i++) {
+      final question = _questions[i];
+      
+      // Debug print to see what's in the question
+      debugPrint('🔄 Validating question ${i + 1}: "${question.question}"');
+      debugPrint('   - Answers: ${question.answers}');
+      debugPrint('   - Correct answers: ${question.correctAnswers}');
+      debugPrint('   - Type: ${question.type}');
+      
+      if (question.question.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Please mark at least one answer as correct'),
+            content: Text('Please enter question ${i + 1}'),
             backgroundColor: Colors.red,
           ),
         );
         return;
       }
 
-      // Validate that all answers are filled
-      for (int i = 0; i < _answerControllers.length; i++) {
-        if (_answerControllers[i].text.isEmpty) {
+      // Only validate answers for multiple choice questions
+      if (question.type == 'multiple_choice') {
+        // Check if at least one answer is marked as correct
+        bool hasCorrectAnswer = question.correctAnswers.contains(true);
+        debugPrint('   - Has correct answer: $hasCorrectAnswer');
+        
+        if (!hasCorrectAnswer) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Please fill all answer options'),
+              content: Text('Please mark at least one correct answer for question ${i + 1}'),
               backgroundColor: Colors.red,
             ),
           );
           return;
         }
+
+        // Check if all answer fields are filled
+        for (int j = 0; j < question.answers.length; j++) {
+          debugPrint('   - Answer ${j + 1}: "${question.answers[j]}"');
+          if (question.answers[j].isEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Please fill all answer options for question ${i + 1}'),
+                backgroundColor: Colors.red,
+              ),
+            );
+            return;
+          }
+        }
+      }
+    }
+
+    setState(() {
+      _isSubmitting = true;
+    });
+
+    final String finalCategory;
+      if (_selectedCategory == 'Python' && _customCategory != null && _customCategory!.isNotEmpty) {
+        finalCategory = _customCategory!;
+      } else {
+        finalCategory = _selectedCategory;
       }
 
-      final String finalCategory = _selectedCategory == 'Other' && _customCategory != null && _customCategory!.isNotEmpty
-          ? _customCategory!
-          : _selectedCategory;
+    // Get current user's username
+    final currentUser = Supabase.instance.client.auth.currentUser;
+    final createdBy = currentUser?.email?.split('@').first ?? 'User';
 
-      final newQuiz = {
-        'question': _questionController.text,
-        'category': finalCategory,
-        'answers': _answerControllers.map((c) => c.text).toList(),
-        'correct_answers': _correctAnswers,
-        'difficulty': _difficulty,
-        'user_id': widget.currentUserId,
-        'created_at': DateTime.now().toIso8601String(),
-      };
+    // Create the main quiz data with grouped questions
+    final Map<String, dynamic> quizData = {
+      'name': _quizNameController.text,
+      'category': finalCategory,
+      'user_id': widget.currentUserId,
+      'created_by': createdBy,
+      'total_questions': _questions.length,
+      'question_types': _questions.map((q) => q.type).toList(),
+      'is_active': true,
+      'created_at': DateTime.now().toIso8601String(),
+      'questions': _questions.map((question) => {
+        'question': question.question,
+        'type': question.type,
+        'answers': question.type == 'multiple_choice' ? question.answers : [],
+        'correct_answers': question.type == 'multiple_choice' ? question.correctAnswers : [],
+      }).toList(),
+    };
 
-      widget.onQuizCreated(newQuiz);
+    debugPrint('✅ All validation passed, creating quiz...');
+    await widget.onQuizCreated(quizData);
+    
+    if (mounted) {
       Navigator.of(context).pop();
+    }
+  }
+}
 
+  void _addMoreQuestions() {
+    setState(() {
+      _questions.add(QuizQuestionData(
+        question: '',
+        answers: ['', '', '', ''],
+        correctAnswers: [false, false, false, false],
+        type: 'multiple_choice',
+      ));
+    });
+  }
+
+  void _addEssayQuestion() {
+    setState(() {
+      _questions.add(QuizQuestionData(
+        question: '',
+        answers: [],
+        correctAnswers: [],
+        type: 'essay',
+      ));
+    });
+  }
+
+  void _removeQuestion(int index) {
+    if (_questions.length > 1) {
+      setState(() {
+        _questions.removeAt(index);
+      });
+    } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Quiz question created successfully!'),
-          backgroundColor: Colors.green,
+          content: Text('You must have at least one question'),
+          backgroundColor: Colors.orange,
         ),
       );
     }
   }
 
-  Widget _buildAnswerField(int index) {
-    final screenSize = MediaQuery.of(context).size;
-    final isSmallScreen = screenSize.width < 600;
+  Widget _buildQuestionCard(int questionIndex) {
+  final screenSize = MediaQuery.of(context).size;
+  final isSmallScreen = screenSize.width < 600;
+  final question = _questions[questionIndex];
 
-    return Card(
-      margin: EdgeInsets.symmetric(vertical: isSmallScreen ? 4 : 6),
-      child: Padding(
-        padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
-        child: Row(
-          children: [
-            // Checkbox for correct answer
-            Checkbox(
-              value: _correctAnswers[index],
-              onChanged: (value) {
-                setState(() {
-                  _correctAnswers[index] = value!;
-                });
-              },
-            ),
-            SizedBox(width: isSmallScreen ? 8 : 12),
-            
-            // Answer letter indicator
-            Container(
-              width: isSmallScreen ? 24 : 28,
-              height: isSmallScreen ? 24 : 28,
-              decoration: BoxDecoration(
-                color: Colors.purple[100],
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Center(
-                child: Text(
-                  String.fromCharCode(65 + index), // A, B, C, D
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.purple[800],
-                    fontSize: isSmallScreen ? 12 : 14,
+  return Card(
+    margin: EdgeInsets.symmetric(vertical: isSmallScreen ? 8 : 12),
+    elevation: 3,
+    child: Padding(
+      padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Question header with remove button and type badge
+          Row(
+            children: [
+              Container(
+                width: isSmallScreen ? 28 : 32,
+                height: isSmallScreen ? 28 : 32,
+                decoration: BoxDecoration(
+                  color: Colors.purple[100],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Center(
+                  child: Text(
+                    '${questionIndex + 1}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.purple[800],
+                      fontSize: isSmallScreen ? 12 : 14,
+                    ),
                   ),
                 ),
               ),
-            ),
-            SizedBox(width: isSmallScreen ? 8 : 12),
-            
-            // Answer text field
-            Expanded(
-              child: TextFormField(
-                controller: _answerControllers[index],
-                decoration: InputDecoration(
-                  labelText: 'Answer ${String.fromCharCode(65 + index)}',
-                  border: OutlineInputBorder(),
-                  hintText: 'Enter answer option...',
-                  filled: _correctAnswers[index],
-                  fillColor: _correctAnswers[index] ? Colors.green[50] : null,
+              SizedBox(width: isSmallScreen ? 12 : 16),
+              Expanded(
+                child: Text(
+                  'Question ${questionIndex + 1} (${question.type == 'essay' ? 'Essay' : 'Multiple Choice'})',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: isSmallScreen ? 16 : 18,
+                    color: Colors.purple[800],
+                  ),
                 ),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter answer text';
-                  }
-                  return null;
-                },
+              ),
+              // Type badge
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: question.type == 'essay' ? Colors.orange[100] : Colors.blue[100],
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  question.type == 'essay' ? 'Essay' : 'Multiple Choice',
+                  style: TextStyle(
+                    fontSize: isSmallScreen ? 10 : 12,
+                    color: question.type == 'essay' ? Colors.orange[800] : Colors.blue[800],
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              SizedBox(width: isSmallScreen ? 8 : 12),
+              if (_questions.length > 1)
+                IconButton(
+                  icon: Icon(Icons.delete, color: Colors.red, size: isSmallScreen ? 18 : 20),
+                  onPressed: () => _removeQuestion(questionIndex),
+                  tooltip: 'Remove Question',
+                ),
+            ],
+          ),
+          SizedBox(height: isSmallScreen ? 12 : 16),
+
+          // Question field
+          TextFormField(
+            initialValue: question.question,
+            decoration: InputDecoration(
+              labelText: 'Question *',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.question_mark),
+              hintText: question.type == 'essay' ? 'Enter essay question...' : 'Enter your quiz question...',
+            ),
+            maxLines: question.type == 'essay' ? 3 : 2,
+            onChanged: (value) {
+               setState(() {
+      _questions[questionIndex] = _questions[questionIndex].copyWith(question: value);
+    });
+  },
+  validator: (value) {
+    if (value == null || value.isEmpty) {
+      return 'Please enter a question';
+    }
+    return null;
+  },
+),
+
+          // Answer options only for multiple choice
+          if (question.type == 'multiple_choice') ...[
+            SizedBox(height: isSmallScreen ? 12 : 16),
+            Text(
+              'Answer Options:',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: isSmallScreen ? 14 : 16,
+              ),
+            ),
+            SizedBox(height: isSmallScreen ? 8 : 12),
+            ...List.generate(4, (answerIndex) => _buildAnswerField(questionIndex, answerIndex)),
+          ],
+
+          // Essay instructions
+          if (question.type == 'essay') ...[
+            SizedBox(height: isSmallScreen ? 12 : 16),
+            Container(
+              padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
+              decoration: BoxDecoration(
+                color: Colors.orange[50],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info, color: Colors.orange, size: isSmallScreen ? 16 : 18),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'This is an essay question. Students will write their answers in paragraph form.',
+                      style: TextStyle(
+                        color: Colors.orange[800],
+                        fontSize: isSmallScreen ? 12 : 14,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
-        ),
+        ],
       ),
-    );
-  }
+    ),
+  );
+}
 
- @override
+  Widget _buildAnswerField(int questionIndex, int answerIndex) {
+  final screenSize = MediaQuery.of(context).size;
+  final isSmallScreen = screenSize.width < 600;
+  final question = _questions[questionIndex];
+
+  return Card(
+    margin: EdgeInsets.symmetric(vertical: isSmallScreen ? 4 : 6),
+    color: question.correctAnswers[answerIndex] ? Colors.green[50] : null,
+    child: Padding(
+      padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
+      child: Row(
+        children: [
+          // Checkbox for correct answer
+          Checkbox(
+            value: question.correctAnswers[answerIndex],
+            onChanged: (value) {
+              setState(() {
+                final newCorrectAnswers = List<bool>.from(question.correctAnswers);
+                newCorrectAnswers[answerIndex] = value!;
+                _questions[questionIndex] = _questions[questionIndex].copyWith(correctAnswers: newCorrectAnswers);
+              });
+            },
+          ),
+          SizedBox(width: isSmallScreen ? 8 : 12),
+          
+          // Answer letter indicator
+          Container(
+            width: isSmallScreen ? 24 : 28,
+            height: isSmallScreen ? 24 : 28,
+            decoration: BoxDecoration(
+              color: Colors.purple[100],
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Center(
+              child: Text(
+                String.fromCharCode(65 + answerIndex), // A, B, C, D
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.purple[800],
+                  fontSize: isSmallScreen ? 12 : 14,
+                ),
+              ),
+            ),
+          ),
+          SizedBox(width: isSmallScreen ? 8 : 12),
+          
+          // Answer text field
+          Expanded(
+            child: TextFormField(
+              initialValue: question.answers[answerIndex],
+              decoration: InputDecoration(
+                labelText: 'Answer ${String.fromCharCode(65 + answerIndex)}',
+                border: OutlineInputBorder(),
+                hintText: 'Enter answer option...',
+              ),
+              onChanged: (value) {
+                setState(() {
+                  final newAnswers = List<String>.from(question.answers);
+                  newAnswers[answerIndex] = value;
+                  _questions[questionIndex] = _questions[questionIndex].copyWith(answers: newAnswers);
+                });
+              },
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+  @override
   Widget build(BuildContext context) {
     final screenSize = MediaQuery.of(context).size;
     final isSmallScreen = screenSize.width < 600;
@@ -2751,7 +3176,7 @@ class _QuizCreationDialogState extends State<QuizCreationDialog> {
           Icon(Icons.quiz, color: Colors.purple),
           SizedBox(width: 8),
           Text(
-            'Create Quiz Question',
+            'Create Quiz: ${_quizNameController.text.isNotEmpty ? _quizNameController.text : "Untitled"}',
             style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
           ),
         ],
@@ -2762,29 +3187,27 @@ class _QuizCreationDialogState extends State<QuizCreationDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Quiz Name
               TextFormField(
-              controller: _questionController,
-              decoration: InputDecoration(
-                labelText: 'Question *',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.question_mark),
-                hintText: 'Enter your quiz question...',
+                controller: _quizNameController,
+                decoration: InputDecoration(
+                  labelText: 'Quiz Name *',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.title),
+                  hintText: 'Enter quiz name...',
+                ),
+                onChanged: (value) {
+                  setState(() {}); // Refresh to update title
+                },
               ),
-              maxLines: 3,
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please enter a question';
-                }
-                return null;
-              },
-            ),
-            SizedBox(height: isSmallScreen ? 16 : 20),
-              // Difficulty Dropdown
+              SizedBox(height: isSmallScreen ? 16 : 20),
+
+              // Category Selection
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Difficulty',
+                    'Category for all questions',
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: isSmallScreen ? 14 : 16,
@@ -2793,75 +3216,112 @@ class _QuizCreationDialogState extends State<QuizCreationDialog> {
                   ),
                   SizedBox(height: isSmallScreen ? 6 : 8),
                   DropdownButtonFormField<String>(
-                    initialValue: _difficulty,
+                    initialValue: _selectedCategory,
                     decoration: InputDecoration(
                       border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.flag, color: Colors.red),
+                      prefixIcon: Icon(Icons.category),
                       contentPadding: EdgeInsets.symmetric(
                         horizontal: isSmallScreen ? 12 : 16,
                         vertical: isSmallScreen ? 14 : 16,
                       ),
                     ),
                     items: [
-                      DropdownMenuItem(
-                        value: 'Easy',
-                        child: Row(
-                          children: [
-                            Icon(Icons.sentiment_satisfied, color: Colors.green),
-                            SizedBox(width: 8),
-                            Text('Easy'),
-                          ],
-                        ),
-                      ),
-                      DropdownMenuItem(
-                        value: 'Medium',
-                        child: Row(
-                          children: [
-                            Icon(Icons.sentiment_neutral, color: Colors.orange),
-                            SizedBox(width: 8),
-                            Text('Medium'),
-                          ],
-                        ),
-                      ),
-                      DropdownMenuItem(
-                        value: 'Hard',
-                        child: Row(
-                          children: [
-                            Icon(Icons.sentiment_dissatisfied, color: Colors.red),
-                            SizedBox(width: 8),
-                            Text('Hard'),
-                          ],
-                        ),
-                      ),
-                    ],
+                      'Python', 'Java', 'C#'
+                    ].map((String category) {
+                      return DropdownMenuItem(
+                        value: category,
+                        child: Text(category),
+                      );
+                    }).toList(),
                     onChanged: (value) {
                       setState(() {
-                        _difficulty = value!;
+                        _selectedCategory = value!;
                       });
                     },
                   ),
+                  if (_selectedCategory == 'Python')
+                    Column(
+                      children: [
+                        SizedBox(height: isSmallScreen ? 8 : 12),
+                        TextFormField(
+                          decoration: InputDecoration(
+                            labelText: 'Custom Category *',
+                            border: OutlineInputBorder(),
+                            prefixIcon: Icon(Icons.create),
+                          ),
+                          onChanged: (value) {
+                            setState(() {
+                              _customCategory = value;
+                            });
+                          },
+                        ),
+                      ],
+                    ),
                 ],
               ),
               SizedBox(height: isSmallScreen ? 16 : 20),
 
-              // Answer Options
-              Text(
-                'Answer Options:',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: isSmallScreen ? 14 : 16,
-                ),
-              ),
-              SizedBox(height: isSmallScreen ? 8 : 12),
-              ...List.generate(4, (index) => _buildAnswerField(index)),
+              // Questions List
+              ...List.generate(_questions.length, (index) => _buildQuestionCard(index)),
 
-              SizedBox(height: isSmallScreen ? 8 : 12),
-              
+              // Add More Buttons
+              Column(
+                children: [
+                  // Add More Questions Button
+                  Container(
+                    width: double.infinity,
+                    margin: EdgeInsets.symmetric(vertical: isSmallScreen ? 4 : 6),
+                    child: ElevatedButton.icon(
+                      onPressed: _addMoreQuestions,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: isSmallScreen ? 16 : 20,
+                          vertical: isSmallScreen ? 12 : 14,
+                        ),
+                      ),
+                      icon: Icon(Icons.add, size: isSmallScreen ? 18 : 20),
+                      label: Text(
+                        'Add Multiple Choice Question',
+                        style: TextStyle(
+                          fontSize: isSmallScreen ? 14 : 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                  
+                  // Add Essay Button
+                  Container(
+                    width: double.infinity,
+                    margin: EdgeInsets.symmetric(vertical: isSmallScreen ? 4 : 6),
+                    child: ElevatedButton.icon(
+                      onPressed: _addEssayQuestion,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: isSmallScreen ? 16 : 20,
+                          vertical: isSmallScreen ? 12 : 14,
+                        ),
+                      ),
+                      icon: Icon(Icons.edit, size: isSmallScreen ? 18 : 20),
+                      label: Text(
+                        'Add Essay Question',
+                        style: TextStyle(
+                          fontSize: isSmallScreen ? 14 : 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+
               // Instructions
               Container(
                 padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
                 decoration: BoxDecoration(
-                  color: Colors.orange[50],
+                  color: Colors.green[50],
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Column(
@@ -2869,24 +3329,27 @@ class _QuizCreationDialogState extends State<QuizCreationDialog> {
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.info, size: isSmallScreen ? 14 : 16, color: Colors.orange),
+                        Icon(Icons.info, size: isSmallScreen ? 14 : 16, color: Colors.green),
                         SizedBox(width: isSmallScreen ? 6 : 8),
                         Text(
-                          'Instructions:',
+                          'Quiz Group Information:',
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: isSmallScreen ? 12 : 14,
-                            color: Colors.orange[800],
+                            color: Colors.green[800],
                           ),
                         ),
                       ],
                     ),
                     SizedBox(height: isSmallScreen ? 4 : 6),
                     Text(
-                      '• Check the box next to correct answers\n• Multiple correct answers are allowed\n• Fill all four answer options\n• Select appropriate category and difficulty',
+                      '• All ${_questions.length} questions will be grouped under "${_quizNameController.text.isNotEmpty ? _quizNameController.text : "this quiz"}"\n'
+                      '• ${_questions.where((q) => q.type == 'multiple_choice').length} multiple choice questions\n'
+                      '• ${_questions.where((q) => q.type == 'essay').length} essay questions\n'
+                      '• Students will see this as one complete quiz',
                       style: TextStyle(
                         fontSize: isSmallScreen ? 10 : 12,
-                        color: Colors.orange[800],
+                        color: Colors.green[800],
                         height: 1.4,
                       ),
                     ),
@@ -2899,14 +3362,14 @@ class _QuizCreationDialogState extends State<QuizCreationDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: _isSubmitting ? null : () => Navigator.of(context).pop(),
           child: Text(
             'Cancel',
             style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
           ),
         ),
         ElevatedButton(
-          onPressed: _createQuiz,
+          onPressed: _isSubmitting ? null : _createQuiz,
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.purple,
             padding: EdgeInsets.symmetric(
@@ -2914,15 +3377,454 @@ class _QuizCreationDialogState extends State<QuizCreationDialog> {
               vertical: isSmallScreen ? 12 : 14,
             ),
           ),
-          child: Text(
-            'Create Question',
-            style: TextStyle(
-              fontSize: isSmallScreen ? 14 : 16,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
+          child: _isSubmitting
+              ? SizedBox(
+                  width: isSmallScreen ? 16 : 20,
+                  height: isSmallScreen ? 16 : 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : Text(
+                  'Create Quiz (${_questions.length} questions)',
+                  style: TextStyle(
+                    fontSize: isSmallScreen ? 14 : 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
         ),
       ],
     );
   }
+
+  @override
+  void dispose() {
+    _quizNameController.dispose();
+    super.dispose();
+  }
 }
+
+// Simple data class without controllers for better performance
+class QuizQuestionData {
+  final String question;
+  final List<String> answers;
+  final List<bool> correctAnswers;
+  final String type;
+
+  QuizQuestionData({
+    required this.question,
+    required this.answers,
+    required this.correctAnswers,
+    required this.type,
+  });
+
+  QuizQuestionData copyWith({
+    String? question,
+    List<String>? answers,
+    List<bool>? correctAnswers,
+    String? type,
+  }) {
+    return QuizQuestionData(
+      question: question ?? this.question,
+      answers: answers ?? this.answers,
+      correctAnswers: correctAnswers ?? this.correctAnswers,
+      type: type ?? this.type,
+    );
+  }
+}
+
+class QuizEditDialog extends StatefulWidget {
+  final Map<String, dynamic> quiz;
+  final Function(Map<String, dynamic>) onQuizUpdated;
+  final String currentUserId;
+
+  const QuizEditDialog({
+    super.key,
+    required this.quiz,
+    required this.onQuizUpdated,
+    required this.currentUserId,
+  });
+
+  @override
+  State<QuizEditDialog> createState() => _QuizEditDialogState();
+}
+
+class _QuizEditDialogState extends State<QuizEditDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late String _selectedCategory;
+  String? _customCategory;
+  final TextEditingController _questionController = TextEditingController();
+  final List<TextEditingController> _answerControllers = [];
+  final List<bool> _correctAnswers = [];
+  late String _questionType;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeForm();
+  }
+
+  void _initializeForm() {
+    // Initialize question
+    _questionController.text = widget.quiz['question'] ?? '';
+    
+    // Initialize category
+    _selectedCategory = widget.quiz['category'] ?? 'Python';
+    if (!['Python', 'Java', 'C#'].contains(_selectedCategory)) {
+      _customCategory = _selectedCategory;
+      _selectedCategory = 'null';
+    }
+    
+    // Initialize question type
+    _questionType = widget.quiz['question_type'] ?? 'multiple_choice';
+    
+    // Initialize answers for multiple choice questions
+    if (_questionType == 'multiple_choice') {
+      final answers = List<String>.from(widget.quiz['answers'] ?? []);
+      final correctAnswers = List<String>.from(widget.quiz['correct_answers'] ?? []);
+      
+      // Initialize 4 answer fields
+      for (int i = 0; i < 4; i++) {
+        _answerControllers.add(TextEditingController(
+          text: i < answers.length ? answers[i] : ''
+        ));
+        _correctAnswers.add(correctAnswers.contains(answers[i]));
+      }
+    }
+  }
+
+  void _updateQuiz() {
+    if (_formKey.currentState!.validate()) {
+      if (_questionType == 'multiple_choice') {
+        // Validate that at least one answer is marked as correct
+        if (!_correctAnswers.contains(true)) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Please mark at least one correct answer'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          return;
+        }
+
+        // Validate that all answer fields are filled
+        for (int i = 0; i < _answerControllers.length; i++) {
+          if (_answerControllers[i].text.isEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Please fill all answer options'),
+                backgroundColor: Colors.red,
+              ),
+            );
+            return;
+          }
+        }
+      }
+
+      final String finalCategory;
+      if (_selectedCategory == 'Python' && _customCategory != null && _customCategory!.isNotEmpty) {
+        finalCategory = _customCategory!;
+      } else {
+        finalCategory = _selectedCategory;
+      }
+
+      final updatedQuiz = {
+        'id': widget.quiz['id'],
+        'question': _questionController.text,
+        'category': finalCategory,
+        'type': _questionType,
+        'answers': _questionType == 'multiple_choice' 
+            ? _answerControllers.map((controller) => controller.text).toList()
+            : [],
+        'correct_answers': _questionType == 'multiple_choice' 
+            ? _answerControllers.asMap().entries.map((entry) {
+                final index = entry.key;
+                return _correctAnswers[index] ? entry.value.text : null;
+              }).where((answer) => answer != null).toList()
+            : [],
+        'difficulty': widget.quiz['difficulty'] ?? 'medium',
+      };
+
+      widget.onQuizUpdated(updatedQuiz);
+      Navigator.of(context).pop();
+    }
+  }
+
+  Widget _buildAnswerField(int index) {
+    final screenSize = MediaQuery.of(context).size;
+    final isSmallScreen = screenSize.width < 600;
+
+    return Card(
+      margin: EdgeInsets.symmetric(vertical: isSmallScreen ? 4 : 6),
+      color: _correctAnswers[index] ? Colors.green[50] : null,
+      child: Padding(
+        padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
+        child: Row(
+          children: [
+            Checkbox(
+              value: _correctAnswers[index],
+              onChanged: (value) {
+                setState(() {
+                  _correctAnswers[index] = value!;
+                });
+              },
+            ),
+            SizedBox(width: isSmallScreen ? 8 : 12),
+            Container(
+              width: isSmallScreen ? 24 : 28,
+              height: isSmallScreen ? 24 : 28,
+              decoration: BoxDecoration(
+                color: Colors.purple[100],
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Center(
+                child: Text(
+                  String.fromCharCode(65 + index),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.purple[800],
+                    fontSize: isSmallScreen ? 12 : 14,
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(width: isSmallScreen ? 8 : 12),
+            Expanded(
+              child: TextFormField(
+                controller: _answerControllers[index],
+                decoration: InputDecoration(
+                  labelText: 'Answer ${String.fromCharCode(65 + index)}',
+                  border: OutlineInputBorder(),
+                  hintText: 'Enter answer option...',
+                ),
+                validator: (value) {
+                  if (_questionType == 'multiple_choice' && (value == null || value.isEmpty)) {
+                    return 'Please enter answer';
+                  }
+                  return null;
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  
+
+  @override
+  Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    final isSmallScreen = screenSize.width < 600;
+
+    return AlertDialog(
+      title: Row(
+        children: [
+          Icon(Icons.edit, color: Colors.blue),
+          SizedBox(width: 8),
+          Text(
+            'Edit Quiz Question',
+            style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
+          ),
+        ],
+      ),
+      content: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Question Type Display (read-only)
+              Container(
+                padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info, color: Colors.blue),
+                    SizedBox(width: 8),
+                    Text(
+                      'Question Type: ${_questionType == 'essay' ? 'Essay' : 'Multiple Choice'}',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue[800],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(height: isSmallScreen ? 16 : 20),
+
+              // Category Selection
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Category',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: isSmallScreen ? 14 : 16,
+                      color: Colors.grey[700],
+                    ),
+                  ),
+                  SizedBox(height: isSmallScreen ? 6 : 8),
+                  DropdownButtonFormField<String>(
+                    initialValue: _selectedCategory,
+                    decoration: InputDecoration(
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.category),
+                    ),
+                    items: [
+                      'Python', 'Java', 'C#',
+                    ].map((String category) {
+                      return DropdownMenuItem(
+                        value: category,
+                        child: Text(category),
+                      );
+                    }).toList(),
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedCategory = value!;
+                      });
+                    },
+                  ),
+                  if (_selectedCategory == 'Python')
+                    Column(
+                      children: [
+                        SizedBox(height: isSmallScreen ? 8 : 12),
+                        TextFormField(
+                          initialValue: _customCategory,
+                          decoration: InputDecoration(
+                            labelText: 'Custom Category *',
+                            border: OutlineInputBorder(),
+                            prefixIcon: Icon(Icons.create),
+                          ),
+                          onChanged: (value) {
+                            setState(() {
+                              _customCategory = value;
+                            });
+                          },
+                          validator: (value) {
+                            if (_selectedCategory == 'Python' && (value == null || value.isEmpty)) {
+                              return 'Please enter custom category';
+                            }
+                            return null;
+                          },
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+              SizedBox(height: isSmallScreen ? 16 : 20),
+
+              // Question Field
+              TextFormField(
+                controller: _questionController,
+                decoration: InputDecoration(
+                  labelText: 'Question *',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.question_mark),
+                ),
+                maxLines: _questionType == 'essay' ? 3 : 2,
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter a question';
+                  }
+                  return null;
+                },
+              ),
+              SizedBox(height: isSmallScreen ? 16 : 20),
+
+              // Answer Options (only for multiple choice)
+              if (_questionType == 'multiple_choice') ...[
+                Text(
+                  'Answer Options:',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: isSmallScreen ? 14 : 16,
+                  ),
+                ),
+                SizedBox(height: isSmallScreen ? 8 : 12),
+                ...List.generate(4, (index) => _buildAnswerField(index)),
+                SizedBox(height: isSmallScreen ? 8 : 12),
+                Container(
+                  padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue[50],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.check_circle, color: Colors.blue, size: 16),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Check the boxes to mark correct answers',
+                          style: TextStyle(
+                            color: Colors.blue[800],
+                            fontSize: isSmallScreen ? 12 : 14,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
+              // Essay Instructions
+              if (_questionType == 'essay') ...[
+                Container(
+                  padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
+                  decoration: BoxDecoration(
+                    color: Colors.orange[50],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info, color: Colors.orange, size: 16),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'This is an essay question. Students will write their answers in paragraph form.',
+                          style: TextStyle(
+                            color: Colors.orange[800],
+                            fontSize: isSmallScreen ? 12 : 14,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _updateQuiz,
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+          child: Text('Update Quiz'),
+        ),
+      ],
+    );
+  }
+
+  @override
+  void dispose() {
+    _questionController.dispose();
+    for (var controller in _answerControllers) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+}
+

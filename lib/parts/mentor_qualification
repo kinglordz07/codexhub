@@ -1,0 +1,491 @@
+import 'package:flutter/material.dart';
+import 'package:codexhub01/services/authservice.dart';
+import 'package:codexhub01/parts/log_in.dart';
+
+class MentorQualification extends StatefulWidget {
+  final String username;
+  final String email;
+  
+  const MentorQualification({
+    super.key,
+    required this.username,
+    required this.email,
+  });
+
+  @override
+  State<MentorQualification> createState() => _MentorQualificationState();
+}
+
+class _MentorQualificationState extends State<MentorQualification> {
+  final _authService = AuthService();
+  bool _isLoading = false;
+
+  // Form controllers
+  final _fullNameController = TextEditingController();
+  final _professionController = TextEditingController();
+  final _companyController = TextEditingController();
+  final _educationController = TextEditingController();
+  final _motivationController = TextEditingController();
+
+  // Form state
+  int? _yearsOfExperience;
+  bool _hasMentoringExperience = false;
+  int? _hoursPerWeek;
+  final List<String> _selectedExpertise = [];
+
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void dispose() {
+    _fullNameController.dispose();
+    _professionController.dispose();
+    _companyController.dispose();
+    _educationController.dispose();
+    _motivationController.dispose();
+    super.dispose();
+  }
+
+  void _safeSetState(VoidCallback fn) {
+    if (mounted) setState(fn);
+  }
+
+  Future<void> _submitQualification() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    _safeSetState(() => _isLoading = true);
+
+    try {
+      final qualificationData = {
+        'username': widget.username,
+        'email': widget.email,
+        'fullName': _fullNameController.text.trim(),
+        'profession': _professionController.text.trim(),
+        'company': _companyController.text.trim(),
+        'yearsOfExperience': _yearsOfExperience,
+        'education': _educationController.text.trim(),
+        'hasMentoringExperience': _hasMentoringExperience,
+        'expertiseAreas': _selectedExpertise,
+        'hoursPerWeek': _hoursPerWeek,
+        'motivation': _motivationController.text.trim(),
+        'submittedAt': DateTime.now().toIso8601String(),
+      };
+
+      debugPrint('📝 Submitting mentor qualification: $qualificationData');
+
+      // Call backend service to save qualification
+      final result = await _authService.submitMentorQualification(qualificationData);
+
+      if (!mounted) return;
+
+      if (result['success'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("✅ ${result['message']}"),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+
+        // Navigate to success screen
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => _QualificationSuccessScreen(
+              username: widget.username,
+            ),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("❌ ${result['error']}"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e, st) {
+      debugPrint('💥 Error submitting qualification: $e\n$st');
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("❌ Error submitting qualification: $e"),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      _safeSetState(() => _isLoading = false);
+    }
+  }
+
+  // ✅ FIXED: Validators with correct parameter types
+  String? _validateRequired(String? value, String fieldName) {
+    if (value == null || value.isEmpty) return 'Please enter your $fieldName';
+    return null;
+  }
+
+  // ✅ FIXED: Now accepts int? instead of String?
+  String? _validateExperience(int? value) {
+    if (value == null) return 'Please select years of experience';
+    return null;
+  }
+
+  // ✅ FIXED: Now accepts int? instead of String?
+  String? _validateAvailability(int? value) {
+    if (value == null) return 'Please select your availability';
+    return null;
+  }
+
+  String? _validateExpertise(String? value) {
+    if (_selectedExpertise.isEmpty) return 'Please select at least one area of expertise';
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Scaffold(
+      backgroundColor: theme.scaffoldBackgroundColor,
+      appBar: AppBar(
+        title: const Text("Mentor Qualification"),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: _isLoading ? null : () => Navigator.pop(context),
+        ),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "Complete Your Mentor Profile",
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                "Please provide your professional information for admin approval",
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: isDark ? Colors.white70 : Colors.black54,
+                ),
+              ),
+              const SizedBox(height: 32),
+
+              // Personal Information Section
+              _buildSectionHeader("Personal Information", Icons.person),
+              const SizedBox(height: 16),
+              
+              _buildTextField(_fullNameController, "Full Name", Icons.badge_outlined, (v) => _validateRequired(v, "full name"), isDark),
+              const SizedBox(height: 16),
+              
+              _buildTextField(_professionController, "Profession", Icons.work_outline, (v) => _validateRequired(v, "profession"), isDark),
+              const SizedBox(height: 16),
+              
+              _buildTextField(_companyController, "Current Company/Organization", Icons.business_outlined, (v) => _validateRequired(v, "company"), isDark),
+              const SizedBox(height: 16),
+
+              // Professional Experience
+              _buildSectionHeader("Professional Experience", Icons.timeline),
+              const SizedBox(height: 16),
+
+              DropdownButtonFormField<int>(
+                value: _yearsOfExperience,
+                onChanged: _isLoading ? null : (value) => _safeSetState(() => _yearsOfExperience = value),
+                items: const [
+                  DropdownMenuItem(value: 1, child: Text("1-2 years")),
+                  DropdownMenuItem(value: 3, child: Text("3-5 years")),
+                  DropdownMenuItem(value: 5, child: Text("5-7 years")),
+                  DropdownMenuItem(value: 8, child: Text("8+ years")),
+                ],
+                decoration: const InputDecoration(
+                  labelText: "Years of Professional Experience",
+                  prefixIcon: Icon(Icons.work_history),
+                ),
+                // ✅ FIXED: Now using the correct validator type
+                validator: _validateExperience,
+              ),
+              const SizedBox(height: 16),
+
+              _buildTextField(_educationController, "Educational Background", Icons.school_outlined, (v) => _validateRequired(v, "educational background"), isDark),
+              const SizedBox(height: 16),
+
+              // Mentoring Experience
+              SwitchListTile.adaptive(
+                title: const Text("Previous Mentoring Experience"),
+                subtitle: const Text("Have you mentored before?"),
+                value: _hasMentoringExperience,
+                onChanged: _isLoading ? null : (value) => _safeSetState(() => _hasMentoringExperience = value),
+                secondary: const Icon(Icons.people_outline),
+              ),
+              const SizedBox(height: 16),
+
+              // Areas of Expertise
+              _buildSectionHeader("Areas of Expertise", Icons.category),
+              const SizedBox(height: 8),
+              Text(
+                "Select all that apply",
+                style: TextStyle(
+                  color: isDark ? Colors.white60 : Colors.black54,
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              _buildExpertiseChips(),
+              // ✅ FIXED: Added hidden validator for expertise
+              if (_selectedExpertise.isEmpty)
+                Text(
+                  'Please select at least one area of expertise',
+                  style: TextStyle(
+                    color: Colors.red,
+                    fontSize: 12,
+                  ),
+                ),
+              const SizedBox(height: 16),
+
+              // Availability
+              _buildSectionHeader("Availability", Icons.access_time),
+              const SizedBox(height: 16),
+
+              DropdownButtonFormField<int>(
+                value: _hoursPerWeek,
+                onChanged: _isLoading ? null : (value) => _safeSetState(() => _hoursPerWeek = value),
+                items: const [
+                  DropdownMenuItem(value: 1, child: Text("1-2 hours per week")),
+                  DropdownMenuItem(value: 3, child: Text("3-5 hours per week")),
+                  DropdownMenuItem(value: 5, child: Text("5-7 hours per week")),
+                  DropdownMenuItem(value: 10, child: Text("10+ hours per week")),
+                ],
+                decoration: const InputDecoration(
+                  labelText: "Weekly Availability",
+                  prefixIcon: Icon(Icons.schedule),
+                ),
+                // ✅ FIXED: Now using the correct validator type
+                validator: _validateAvailability,
+              ),
+              const SizedBox(height: 16),
+
+              // Motivation
+              _buildSectionHeader("Motivation", Icons.lightbulb_outline),
+              const SizedBox(height: 16),
+
+              TextFormField(
+                controller: _motivationController,
+                maxLines: 4,
+                validator: (v) => _validateRequired(v, "motivation statement"),
+                decoration: InputDecoration(
+                  labelText: "Why do you want to be a mentor?",
+                  alignLabelWithHint: true,
+                  filled: true,
+                  fillColor: isDark ? Colors.grey[800] : Colors.grey[100],
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 32),
+
+              // Submit Button
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: _isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : ElevatedButton(
+                        onPressed: _submitQualification,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: theme.colorScheme.primary,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: const Text(
+                          "Submit for Approval",
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader(String title, IconData icon) {
+    return Row(
+      children: [
+        Icon(icon, size: 20),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTextField(
+    TextEditingController controller,
+    String label,
+    IconData icon,
+    String? Function(String?)? validator,
+    bool isDark,
+  ) {
+    return TextFormField(
+      controller: controller,
+      validator: validator,
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: Icon(icon),
+        filled: true,
+        fillColor: isDark ? Colors.grey[800] : Colors.grey[100],
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildExpertiseChips() {
+    final expertiseOptions = [
+      'Programming',
+      'Web Development',
+      'Mobile Development',
+      'Data Science',
+      'UI/UX Design',
+      'Project Management',
+      'Career Advice',
+      'Interview Preparation',
+      'Technical Writing',
+      'DevOps',
+    ];
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: expertiseOptions.map((expertise) {
+        final isSelected = _selectedExpertise.contains(expertise);
+        return FilterChip(
+          label: Text(expertise),
+          selected: isSelected,
+          onSelected: _isLoading ? null : (selected) {
+            _safeSetState(() {
+              if (selected) {
+                _selectedExpertise.add(expertise);
+              } else {
+                _selectedExpertise.remove(expertise);
+              }
+            });
+          },
+          checkmarkColor: Colors.white,
+          selectedColor: Theme.of(context).colorScheme.primary,
+          backgroundColor: Theme.of(context).brightness == Brightness.dark 
+              ? Colors.grey[800]! 
+              : Colors.grey[200]!,
+        );
+      }).toList(),
+    );
+  }
+}
+
+// Success Screen after qualification submission
+class _QualificationSuccessScreen extends StatelessWidget {
+  final String username;
+
+  const _QualificationSuccessScreen({required this.username});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Scaffold(
+      backgroundColor: theme.scaffoldBackgroundColor,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.check_circle_outline,
+                size: 80,
+                color: Colors.green,
+              ),
+              const SizedBox(height: 24),
+              Text(
+                "Qualification Submitted!",
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                "Thank you, $username! Your mentor qualification has been submitted for admin approval.",
+                style: theme.textTheme.bodyLarge?.copyWith(
+                  color: isDark ? Colors.white70 : Colors.black54,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                "You will receive an email notification once your application is reviewed.",
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: isDark ? Colors.white60 : Colors.black45,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 32),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: () {
+                    // Navigate back to login
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(builder: (_) => const SignIn()),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: theme.colorScheme.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: const Text(
+                    "Return to Login",
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

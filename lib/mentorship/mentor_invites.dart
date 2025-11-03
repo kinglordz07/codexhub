@@ -90,7 +90,7 @@ class _MentorInvitesState extends State<MentorInvites> {
       // 4️⃣ Get the session details from the invitation
       final invitation = await supabase
           .from('live_invitations')
-          .select('session_id, mentee_id, mentee_name')
+          .select('session_id, mentee_id, mentee_name, message')
           .eq('id', inviteId)
           .maybeSingle();
 
@@ -102,6 +102,7 @@ class _MentorInvitesState extends State<MentorInvites> {
       final sessionId = invitation['session_id']?.toString();
       final menteeId = invitation['mentee_id']?.toString();
       final menteeName = invitation['mentee_name']?.toString() ?? 'Mentee';
+  
 
       if (sessionId == null || menteeId == null) {
         debugPrint('❌ Missing session_id or mentee_id in invitation');
@@ -195,6 +196,33 @@ class _MentorInvitesState extends State<MentorInvites> {
     }
   }
 
+  /// 🔹 Calculate time ago from created_at timestamp
+  String _calculateTimeAgo(String? createdAt) {
+    if (createdAt == null || createdAt.isEmpty) return 'Recently';
+    
+    try {
+      final dateTime = DateTime.parse(createdAt).toLocal();
+      final now = DateTime.now().toLocal();
+      final difference = now.difference(dateTime);
+      
+      if (difference.inSeconds < 60) {
+        return 'Just now';
+      } else if (difference.inMinutes < 60) {
+        return '${difference.inMinutes}m ago';
+      } else if (difference.inHours < 24) {
+        return '${difference.inHours}h ago';
+      } else if (difference.inDays < 30) {
+        return '${difference.inDays}d ago';
+      } else {
+        final months = (difference.inDays / 30).floor();
+        return '$months ${months == 1 ? 'month' : 'months'} ago';
+      }
+    } catch (e) {
+      debugPrint('Error parsing date: $e');
+      return 'Recently';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final screenSize = MediaQuery.of(context).size;
@@ -204,7 +232,7 @@ class _MentorInvitesState extends State<MentorInvites> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          'Mentor Invites',
+          'Session Invitation',
           style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
         ),
         backgroundColor: Colors.indigo,
@@ -229,11 +257,15 @@ class _MentorInvitesState extends State<MentorInvites> {
                       itemBuilder: (context, index) {
                         final invite = invites[index];
                         final menteeName = invite['mentee_name']?.toString() ?? 'Unknown Mentee';
-                        final createdAt = _getInviteTime(invite);
+                        final message = invite['message']?.toString();
+                        final createdAt = invite['created_at']?.toString();
+                        final timeAgo = _calculateTimeAgo(createdAt);
+                        
                         return _buildInviteCard(
                           invite, 
                           menteeName, 
-                          createdAt, 
+                          message,
+                          timeAgo, 
                           isSmallScreen, 
                           isVerySmallScreen
                         );
@@ -242,24 +274,6 @@ class _MentorInvitesState extends State<MentorInvites> {
         ),
       ),
     );
-  }
-
-  String _getInviteTime(Map<String, dynamic> invite) {
-    final createdAt = invite['created_at'];
-    if (createdAt == null) return 'Recently';
-    
-    try {
-      final dateTime = DateTime.parse(createdAt.toString());
-      final now = DateTime.now();
-      final difference = now.difference(dateTime);
-      
-      if (difference.inMinutes < 1) return 'Just now';
-      if (difference.inMinutes < 60) return '${difference.inMinutes}m ago';
-      if (difference.inHours < 24) return '${difference.inHours}h ago';
-      return '${difference.inDays}d ago';
-    } catch (e) {
-      return 'Recently';
-    }
   }
 
   Widget _buildEmptyState(bool isSmallScreen) {
@@ -311,6 +325,7 @@ class _MentorInvitesState extends State<MentorInvites> {
   Widget _buildInviteCard(
     Map<String, dynamic> invite, 
     String menteeName, 
+    String? message,
     String timeAgo,
     bool isSmallScreen, 
     bool isVerySmallScreen
@@ -363,13 +378,62 @@ class _MentorInvitesState extends State<MentorInvites> {
               ),
             ),
             SizedBox(height: isSmallScreen ? 4 : 6),
-            Text(
-              'Tap buttons below to accept or decline',
-              style: TextStyle(
-                fontSize: isSmallScreen ? 12 : 14,
-                color: Colors.grey[500],
+            
+            // 🔥 Display student's message if available
+            if (message != null && message.isNotEmpty) ...[
+              SizedBox(height: isSmallScreen ? 8 : 12),
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.all(isSmallScreen ? 10 : 12),
+                decoration: BoxDecoration(
+                  color: Colors.blue[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue[100]!),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.message,
+                          size: isSmallScreen ? 14 : 16,
+                          color: Colors.blue[700],
+                        ),
+                        SizedBox(width: isSmallScreen ? 6 : 8),
+                        Text(
+                          'Message from $menteeName:',
+                          style: TextStyle(
+                            fontSize: isSmallScreen ? 12 : 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.blue[800],
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: isSmallScreen ? 4 : 6),
+                    Text(
+                      message,
+                      style: TextStyle(
+                        fontSize: isSmallScreen ? 13 : 15,
+                        color: Colors.grey[800],
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
+              SizedBox(height: isSmallScreen ? 8 : 12),
+            ] else ...[
+              SizedBox(height: isSmallScreen ? 4 : 6),
+              Text(
+                'Tap buttons below to accept or decline',
+                style: TextStyle(
+                  fontSize: isSmallScreen ? 12 : 14,
+                  color: Colors.grey[500],
+                ),
+              ),
+            ],
+            
             SizedBox(height: isSmallScreen ? 12 : 16),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
