@@ -30,12 +30,10 @@ class _ResourceLibraryScreenState extends State<ResourceLibraryScreen>
   bool _isLoadingQuizzes = true; 
   int _currentTabIndex = 0;
 
-  // Get current user info
   User? get _currentUser {
     return supabase.auth.currentUser;
   }
 
-  // Helper method to get current user ID or throw error if not logged in
   String get _currentUserId {
     final user = _currentUser;
     if (user == null) {
@@ -74,7 +72,6 @@ class _ResourceLibraryScreenState extends State<ResourceLibraryScreen>
     debugPrint('🔄 Loading resources from database for current user...');
     debugPrint('👤 Current user ID: $_currentUserId');
     
-    // Try the join query first
     try {
       final response = await supabase
           .from('resources')
@@ -98,7 +95,6 @@ class _ResourceLibraryScreenState extends State<ResourceLibraryScreen>
       debugPrint('⚠️ Join query failed: $joinError');
       debugPrint('🔄 Falling back to simple query...');
       
-      // Fallback to simple query without join
       final response = await supabase
           .from('resources')
           .select('*')
@@ -143,7 +139,6 @@ Future<void> _updateQuizInDatabase(Map<String, dynamic> updatedQuiz) async {
   try {
     debugPrint('💾 Updating quiz in database...');
     
-    // Prepare update data
     final Map<String, dynamic> updateData = {
       'question': updatedQuiz['question'],
       'category': updatedQuiz['category'],
@@ -188,7 +183,6 @@ Future<void> _loadUploadedFiles() async {
       _isLoadingFiles = true;
     });
 
-    // Simple query without joins
     final response = await supabase
         .from('resources')
         .select('*')
@@ -218,7 +212,6 @@ Future<void> _loadUploadedFiles() async {
   }
 }
 
-// Load video URLs from video_urls table
 Future<void> _loadVideoUrls() async {
   try {
     debugPrint('🔄 Loading video URLs from video_urls table...');
@@ -260,7 +253,6 @@ Future<void> _loadQuizzes() async {
       _isLoadingQuizzes = true;
     });
 
-    // Load quizzes, including grouped ones
     final response = await supabase
         .from('quizzes')
         .select('*')
@@ -298,7 +290,6 @@ Future<void> _loadQuizzes() async {
     );
   }
 
-  // Add new video URL
   void _addNewVideoUrl() {
     showDialog(
       context: context,
@@ -329,17 +320,13 @@ Future<void> _loadQuizzes() async {
   try {
     debugPrint('💾 Saving quiz group to database for current user...');
 
-    // Get current user's username for created_by field
     final currentUser = _currentUser;
     final createdBy = currentUser?.email?.split('@').first ?? 'User';
-
-    // Save each question individually to the existing quizzes table
     final List<dynamic> questions = quizGroup['questions'] as List<dynamic>;
     
     for (int i = 0; i < questions.length; i++) {
       final question = questions[i] as Map<String, dynamic>;
       
-      // Prepare the correct answers for multiple choice questions
       List<String> correctAnswerTexts = [];
       if (question['type'] == 'multiple_choice') {
         final List<dynamic> correctAnswers = question['correct_answers'] as List<dynamic>;
@@ -352,7 +339,6 @@ Future<void> _loadQuizzes() async {
         }
       }
 
-      // Prepare quiz data
       final Map<String, dynamic> quizData = {
         'question': question['question'].toString(),
         'category': quizGroup['category'].toString(),
@@ -403,7 +389,6 @@ Future<void> _loadQuizzes() async {
   }
 }
 
-  // UPDATED: Removed YouTube-related fields from resource saving
   Future<void> _saveResourceToDatabase(Map<String, dynamic> resource) async {
   try {
     debugPrint('💾 Saving resource to database for current user...');
@@ -414,7 +399,6 @@ Future<void> _loadQuizzes() async {
     debugPrint('   - Has file: ${resource['fileBytes'] != null}');
     debugPrint('   - File name: ${resource['fileName']}');
 
-    // Generate unique filename if file exists
     String? fileName = resource['fileName'];
     String? uniqueFileName;
     if (fileName != null) {
@@ -422,7 +406,6 @@ Future<void> _loadQuizzes() async {
       debugPrint('📁 Generated unique filename: $uniqueFileName');
     }
 
-    // BASIC resource data - REMOVED YouTube fields
     final Map<String, dynamic> resourceData = {
       'title': resource['title'],
       'category': resource['category'],
@@ -442,7 +425,6 @@ Future<void> _loadQuizzes() async {
     debugPrint('✅ Resource saved to database: ${response.length} rows inserted');
     debugPrint('🆕 New resource ID: ${response.isNotEmpty ? response[0]['id'] : 'Unknown'}');
 
-    // If there's a file, upload it to storage with the same unique filename
     if (resource['fileBytes'] != null && uniqueFileName != null) {
       debugPrint('📎 File attachment found, uploading to storage...');
       await _uploadFileToStorage({
@@ -462,7 +444,6 @@ Future<void> _loadQuizzes() async {
       );
     }
 
-    // Force immediate refresh
     await _loadResources();
     await _loadUploadedFiles();
 
@@ -488,7 +469,6 @@ Future<void> _loadQuizzes() async {
   }
 }
 
-  // ADDED: Save video URL to video_urls table
   Future<void> _saveVideoUrlToDatabase(Map<String, dynamic> video) async {
     try {
       debugPrint('💾 Saving video URL to video_urls table...');
@@ -536,7 +516,6 @@ Future<void> _loadQuizzes() async {
     try {
       final resource = _resources[index];
       
-      // Check if this is a system resource (can't be uploaded by users)
       if (resource['is_system_resource'] == true) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -549,7 +528,6 @@ Future<void> _loadQuizzes() async {
         return;
       }
 
-      // Check if already uploaded
       if (resource['is_uploaded_to_learning_tools'] == true) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -573,7 +551,6 @@ Future<void> _loadQuizzes() async {
     }
   }
 
-  // UPDATED: Removed YouTube link from articles upload
   Future<void> _uploadToArticlesTable(Map<String, dynamic> resource) async {
     debugPrint('🚀 STARTING UPLOAD PROCESS');
     debugPrint('📝 Resource details:');
@@ -604,12 +581,9 @@ Future<void> _loadQuizzes() async {
         );
       }
 
-      // Check if resource has a file attachment
       bool hasAttachment = resource['file_name'] != null;
       String? fileName = resource['file_name'];
       String? filePath = hasAttachment ? 'resource-library/$fileName' : null;
-
-      // Get username for display
       String uploadedBy = 'Unknown User';
       if (resource['profiles_new'] != null && resource['profiles_new']['username'] != null) {
         uploadedBy = resource['profiles_new']['username'];
@@ -617,7 +591,6 @@ Future<void> _loadQuizzes() async {
         uploadedBy = 'System';
       }
 
-      // Create article content with all resource information
       String articleContent = '''
 ${resource['description']}
 
@@ -627,7 +600,6 @@ ${hasAttachment ? '📎 Attached File: $fileName' : ''}
 
 ---
 👤 Uploaded by: $uploadedBy
-⏰ Source: Resource Library
 🕒 ${DateTime.now().toString()}
 ''';
 
@@ -639,7 +611,6 @@ ${hasAttachment ? '📎 Attached File: $fileName' : ''}
 
       debugPrint('📡 Attempting database insert...');
 
-      // Prepare article data - REMOVED youtube_link
       final Map<String, dynamic> articleData = {
         'title': resource['title'],
         'content': articleContent,
@@ -649,7 +620,6 @@ ${hasAttachment ? '📎 Attached File: $fileName' : ''}
         'file_path': filePath,
       };
 
-      // Remove null values to avoid database errors
       articleData.removeWhere((key, value) => value == null);
 
       debugPrint('📦 Article data to insert: $articleData');
@@ -659,7 +629,6 @@ ${hasAttachment ? '📎 Attached File: $fileName' : ''}
       debugPrint('✅ DATABASE INSERT SUCCESSFUL');
       debugPrint('📊 Response: $response');
 
-      // In your _uploadToArticlesTable method, update the resource update section:
 if (resource['id'] != null && resource['id'] is int && resource['id'] > 0) {
   debugPrint('🔄 Updating resource with ID: ${resource['id']}');
   
@@ -667,7 +636,7 @@ if (resource['id'] != null && resource['id'] is int && resource['id'] > 0) {
       .from('resources')
       .update({
         'is_uploaded_to_learning_tools': true,
-        'uploaded_to_learning_tools_at': DateTime.now().toIso8601String(), // Set timestamp when uploading
+        'uploaded_to_learning_tools_at': DateTime.now().toIso8601String(), 
       })
       .eq('id', resource['id'])
       .eq('user_id', _currentUserId)
@@ -698,7 +667,6 @@ if (resource['id'] != null && resource['id'] is int && resource['id'] > 0) {
         );
       }
 
-      // Refresh both tabs to reflect the changes
       await _loadResources();
       await _loadUploadedFiles();
       
@@ -735,7 +703,6 @@ if (resource['id'] != null && resource['id'] is int && resource['id'] > 0) {
     debugPrint('📁 Uploading file: $uniqueFileName');
     debugPrint('📊 File size: ${fileBytes.length} bytes');
 
-    // Method 1: Try using uploadBinary directly
     try {
       await supabase.storage
           .from('learning_files')
@@ -745,7 +712,6 @@ if (resource['id'] != null && resource['id'] is int && resource['id'] > 0) {
     } catch (e) {
       debugPrint('⚠️ uploadBinary failed, trying alternative method: $e');
       
-      // Method 2: Create a temporary file and upload
       final tempDir = await getTemporaryDirectory();
       final tempFile = File('${tempDir.path}/$uniqueFileName');
       await tempFile.writeAsBytes(fileBytes);
@@ -754,13 +720,11 @@ if (resource['id'] != null && resource['id'] is int && resource['id'] > 0) {
           .from('learning_files')
           .upload(filePath, tempFile);
           
-      // Clean up temporary file
       await tempFile.delete();
       
       debugPrint('✅ File uploaded successfully using temporary file');
     }
 
-    // Get the public URL for the uploaded file
     final String publicUrl = supabase.storage
         .from('learning_files')
         .getPublicUrl(filePath);
@@ -782,7 +746,6 @@ if (resource['id'] != null && resource['id'] is int && resource['id'] > 0) {
   }
 }
 
-  // Upload video to Learning Tools
 Future<void> _uploadVideoToLearningTools(Map<String, dynamic> video) async {
   debugPrint('🚀 UPLOADING VIDEO TO LEARNING TOOLS VIDEOS TAB');
   debugPrint('🎬 Video details:');
@@ -809,7 +772,6 @@ Future<void> _uploadVideoToLearningTools(Map<String, dynamic> video) async {
       );
     }
 
-    // ✅ SIMPLE: Just mark the video as uploaded in video_urls table
     if (video['id'] != null) {
       await supabase
           .from('video_urls')
@@ -833,7 +795,6 @@ Future<void> _uploadVideoToLearningTools(Map<String, dynamic> video) async {
       );
     }
 
-    // Refresh the video list
     await _loadVideoUrls();
 
   } catch (e) {
@@ -883,7 +844,6 @@ Future<void> _uploadVideoToLearningTools(Map<String, dynamic> video) async {
             .eq('id', video['id'])
             .eq('uploaded_by', _currentUserId);
 
-        // Refresh the video list
         await _loadVideoUrls();
 
         if (mounted) {
@@ -934,7 +894,6 @@ void _markQuizAsRemoved(Map<String, dynamic> quiz) async {
 
   if (confirm == true) {
     try {
-      // Simple update - no updated_at field
       await supabase
           .from('quizzes')
           .update({
@@ -943,7 +902,6 @@ void _markQuizAsRemoved(Map<String, dynamic> quiz) async {
           .eq('id', quiz['id'])
           .eq('user_id', _currentUserId);
 
-      // Refresh the quiz list
       await _loadQuizzes();
 
       if (mounted) {
@@ -980,15 +938,13 @@ void _markQuizAsRemoved(Map<String, dynamic> quiz) async {
 
   String _getUploaderDisplayName(Map<String, dynamic> resource) {
   try {
-    // Check if we have joined profile data
     if (resource['profiles_new'] != null) {
       final profile = resource['profiles_new'];
       if (profile is Map<String, dynamic> && profile['username'] != null) {
         return profile['username'];
       }
     }
-    
-    // Fallback to user_id comparison
+
     final userId = resource['user_id'];
     final isSystemResource = resource['is_system_resource'] == true;
     
@@ -1016,7 +972,6 @@ int _getAnswerCount(Map<String, dynamic> quiz) {
   }
 }
 
-// Helper method to get correct answer count
 int _getCorrectAnswerCount(Map<String, dynamic> quiz) {
   try {
     if (quiz['correct_answers'] is List) {
@@ -1028,17 +983,14 @@ int _getCorrectAnswerCount(Map<String, dynamic> quiz) {
   }
 }
 
-// Helper method to get question type display
 String _getQuestionType(Map<String, dynamic> quiz) {
   final type = quiz['question_type']?.toString().toLowerCase() ?? 'multiple_choice';
   if (type == 'essay') return 'Essay';
   return 'Multiple Choice';
 }
 
-  // Helper for video uploader display name
   String _getVideoUploaderDisplayName(Map<String, dynamic> video) {
   try {
-    // Check if we have joined profile data
     if (video['profiles_new'] != null) {
       final profile = video['profiles_new'];
       if (profile is Map<String, dynamic> && profile['username'] != null) {
@@ -1046,7 +998,6 @@ String _getQuestionType(Map<String, dynamic> quiz) {
       }
     }
     
-    // Fallback to uploaded_by comparison
     final uploadedBy = video['uploaded_by'];
     
     if (uploadedBy == null) {
@@ -1062,10 +1013,8 @@ String _getQuestionType(Map<String, dynamic> quiz) {
   }
 }
 
- // FIXED: Helper for quiz creator display name
 String _getQuizCreatorDisplayName(Map<String, dynamic> quiz) {
   try {
-    // Use created_by field if available, otherwise fallback to user_id
     final createdBy = quiz['created_by'];
     final userId = quiz['user_id'];
     
@@ -1073,7 +1022,6 @@ String _getQuizCreatorDisplayName(Map<String, dynamic> quiz) {
       return createdBy;
     }
     
-    // Fallback to user_id comparison
     if (userId == null) {
       return 'System';
     } else if (userId == _currentUserId) {
@@ -1087,7 +1035,6 @@ String _getQuizCreatorDisplayName(Map<String, dynamic> quiz) {
   }
 }
 
-  // FIXED: Method to open YouTube video
 void _openYoutubeVideo(String youtubeUrl) async {
   try {
     final uri = Uri.parse(youtubeUrl);
@@ -1116,7 +1063,6 @@ void _openYoutubeVideo(String youtubeUrl) async {
   }
 }
 
-  // UPDATED: Removed YouTube-related UI from resources tab
   Widget _buildResourceLibraryTab() {
     final screenSize = MediaQuery.of(context).size;
     final isSmallScreen = screenSize.width < 600;
@@ -1316,144 +1262,154 @@ void _openYoutubeVideo(String youtubeUrl) async {
     );
   }
 
-  Widget _buildUploadedFilesTab() {
-    final screenSize = MediaQuery.of(context).size;
-    final isSmallScreen = screenSize.width < 600;
+ Widget _buildUploadedFilesTab() {
+  final screenSize = MediaQuery.of(context).size;
+  final isSmallScreen = screenSize.width < 600;
 
-    return _isLoadingFiles
-        ? Center(child: CircularProgressIndicator())
-        : _uploadedFiles.isEmpty
-            ? Center(
-                child: Padding(
-                  padding: EdgeInsets.all(isSmallScreen ? 20 : 32),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.folder_open, size: isSmallScreen ? 60 : 80, color: Colors.grey[400]),
-                      SizedBox(height: isSmallScreen ? 12 : 16),
-                      Text(
-                        'No files uploaded to Learning Tools yet',
-                        style: TextStyle(
-                          fontSize: isSmallScreen ? 16 : 18,
-                          color: Colors.grey[600],
-                        ),
-                        textAlign: TextAlign.center,
+  return _isLoadingFiles
+      ? Center(child: CircularProgressIndicator())
+      : _uploadedFiles.isEmpty
+          ? Center(
+              child: Padding(
+                padding: EdgeInsets.all(isSmallScreen ? 20 : 32),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.folder_open, size: isSmallScreen ? 60 : 80, color: Colors.grey[400]),
+                    SizedBox(height: isSmallScreen ? 12 : 16),
+                    Text(
+                      'No files uploaded to Learning Tools yet',
+                      style: TextStyle(
+                        fontSize: isSmallScreen ? 16 : 18,
+                        color: Colors.grey[600],
                       ),
-                      SizedBox(height: isSmallScreen ? 8 : 12),
-                      Text(
-                        'Upload files to Learning Tools using the upload button in Resources tab',
-                        style: TextStyle(
-                          fontSize: isSmallScreen ? 12 : 14,
-                          color: Colors.grey[500],
-                        ),
-                        textAlign: TextAlign.center,
+                      textAlign: TextAlign.center,
+                    ),
+                    SizedBox(height: isSmallScreen ? 8 : 12),
+                    Text(
+                      'Upload files to Learning Tools using the upload button in Resources tab',
+                      style: TextStyle(
+                        fontSize: isSmallScreen ? 12 : 14,
+                        color: Colors.grey[500],
                       ),
-                    ],
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : ListView.builder(
+              padding: EdgeInsets.symmetric(
+                vertical: isSmallScreen ? 8 : 12,
+                horizontal: isSmallScreen ? 8 : 16,
+              ),
+              itemCount: _uploadedFiles.length,
+              itemBuilder: (context, index) {
+                final file = _uploadedFiles[index];
+                final fileName = file['file_name'] ?? 'Unknown File';
+                final fileExtension = fileName.split('.').last.toLowerCase();
+                final uploaderName = _getUploaderDisplayName(file);
+
+                return Card(
+                  margin: EdgeInsets.symmetric(
+                    vertical: isSmallScreen ? 6 : 8,
+                    horizontal: isSmallScreen ? 4 : 0,
                   ),
-                ),
-              )
-            : ListView.builder(
-                padding: EdgeInsets.symmetric(
-                  vertical: isSmallScreen ? 8 : 12,
-                  horizontal: isSmallScreen ? 8 : 16,
-                ),
-                itemCount: _uploadedFiles.length,
-                itemBuilder: (context, index) {
-                  final file = _uploadedFiles[index];
-                  final fileName = file['file_name'] ?? 'Unknown File';
-                  final fileExtension = fileName.split('.').last.toLowerCase();
-                  final uploaderName = _getUploaderDisplayName(file);
-
-                  return Card(
-                    margin: EdgeInsets.symmetric(
-                      vertical: isSmallScreen ? 6 : 8,
-                      horizontal: isSmallScreen ? 4 : 0,
-                    ),
-                    elevation: 5,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: ListTile(
-                      contentPadding: EdgeInsets.all(isSmallScreen ? 12 : 16),
-                      title: Text(
-                        file['title'] ?? fileName,
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: isSmallScreen ? 14 : 16,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                  elevation: 5,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: ListTile(
+                    contentPadding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+                    title: Text(
+                      file['title'] ?? fileName,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: isSmallScreen ? 14 : 16,
                       ),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (fileName != 'Unknown File') ...[
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (fileName != 'Unknown File') ...[
+                          Text(
+                            "File: $fileName",
+                            style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
+                          ),
+                        ],
+                        if (file['category'] != null)
+                          Text(
+                            "Category: ${file['category']}",
+                            style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
+                          ),
+                        if (file['description'] != null)
+                          Text(
+                            "Description: ${file['description']}",
+                            style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        SizedBox(height: isSmallScreen ? 2 : 4),
+                        Row(
+                          children: [
+                            Icon(Icons.person, size: isSmallScreen ? 12 : 14, color: Colors.grey),
+                            SizedBox(width: isSmallScreen ? 2 : 4),
                             Text(
-                              "File: $fileName",
-                              style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
+                              'Uploaded by: $uploaderName',
+                              style: TextStyle(fontSize: isSmallScreen ? 10 : 12, color: Colors.grey),
                             ),
                           ],
-                          if (file['category'] != null)
-                            Text(
-                              "Category: ${file['category']}",
-                              style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
-                            ),
-                          if (file['description'] != null)
-                            Text(
-                              "Description: ${file['description']}",
-                              style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          SizedBox(height: isSmallScreen ? 2 : 4),
+                        ),
+                        if (file['uploaded_at'] != null) ...[
+                          SizedBox(height: isSmallScreen ? 1 : 2),
                           Row(
                             children: [
-                              Icon(Icons.person, size: isSmallScreen ? 12 : 14, color: Colors.grey),
+                              Icon(
+                                Icons.calendar_today,
+                                size: isSmallScreen ? 12 : 14,
+                                color: Colors.grey,
+                              ),
                               SizedBox(width: isSmallScreen ? 2 : 4),
                               Text(
-                                'Uploaded by: $uploaderName',
+                                'Uploaded: ${_formatDate(file['uploaded_at'])}',
                                 style: TextStyle(fontSize: isSmallScreen ? 10 : 12, color: Colors.grey),
                               ),
                             ],
                           ),
-                          if (file['uploaded_at'] != null) ...[
-                            SizedBox(height: isSmallScreen ? 1 : 2),
-                            Row(
-                              children: [
-                                Icon(
-                                  Icons.calendar_today,
-                                  size: isSmallScreen ? 12 : 14,
-                                  color: Colors.grey,
-                                ),
-                                SizedBox(width: isSmallScreen ? 2 : 4),
-                                Text(
-                                  'Uploaded: ${_formatDate(file['uploaded_at'])}',
-                                  style: TextStyle(fontSize: isSmallScreen ? 10 : 12, color: Colors.grey),
-                                ),
-                              ],
-                            ),
-                          ],
                         ],
+                      ],
+                    ),
+                    leading: _getFileIcon(fileExtension, size: isSmallScreen ? 32 : 40),
+      
+                    trailing: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: isSmallScreen ? 40 : 48, 
                       ),
-                      leading: _getFileIcon(fileExtension, size: isSmallScreen ? 32 : 40),
-                      trailing: IconButton(
+                      child: IconButton(
                         icon: Icon(
                           Icons.remove_circle,
                           color: Colors.orange,
-                          size: isSmallScreen ? 18 : 20,
+                          size: isSmallScreen ? 16 : 18,
                         ),
                         onPressed: () {
                           _markFileAsRemoved(file);
                         },
                         tooltip: 'Remove from Learning Tools',
+                        padding: EdgeInsets.zero, 
+                        constraints: BoxConstraints(
+                          minWidth: isSmallScreen ? 28 : 32, 
+                          minHeight: isSmallScreen ? 28 : 32,
+                        ),
                       ),
                     ),
-                  );
-                },
-              );
-  }
+                  ),
+                );
+              },
+            );
+}
 
-  // Video tutorials tab with delete functionality
   Widget _buildVideoTutorialsTab() {
     final screenSize = MediaQuery.of(context).size;
     final isSmallScreen = screenSize.width < 600;
@@ -1604,34 +1560,50 @@ void _openYoutubeVideo(String youtubeUrl) async {
                 ),
               ],
             ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // DELETE BUTTON - only show for own videos
-                if (isOwnVideo)
-                  IconButton(
-                    icon: Icon(Icons.delete_outline, color: Colors.red, size: isSmallScreen ? 18 : 20),
-                    onPressed: () {
-                      _markVideoAsRemoved(video);
-                    },
-                    tooltip: 'Delete Video',
-                  ),
-                // UPLOAD BUTTON - only show for own videos that aren't uploaded yet
-                if (isOwnVideo && !isUploadedToLearningTools)
-                  IconButton(
-                    icon: Icon(Icons.upload, color: Colors.blue, size: isSmallScreen ? 18 : 20),
-                    onPressed: () {
-                      _uploadVideoToLearningTools(video);
-                    },
-                    tooltip: 'Upload to Learning Tools',
-                  ),
-                // PLAY BUTTON
-                IconButton(
-                  icon: Icon(Icons.play_circle_fill, color: Colors.red, size: isSmallScreen ? 24 : 30),
-                  onPressed: () => _openYoutubeVideo(video['youtube_url']),
-                ),
-              ],
-            ),
+trailing: ConstrainedBox(
+  constraints: BoxConstraints(
+    maxWidth: isSmallScreen ? 100 : 120, 
+  ),
+  child: Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      if (isOwnVideo)
+        IconButton(
+          icon: Icon(Icons.delete_outline, color: Colors.red, size: isSmallScreen ? 18 : 20),
+          onPressed: () {
+            _markVideoAsRemoved(video);
+          },
+          tooltip: 'Delete Video',
+          padding: EdgeInsets.zero, 
+          constraints: BoxConstraints(
+            minWidth: isSmallScreen ? 32 : 40,
+          ),
+        ),
+      // UPLOAD BUTTON - only show for own videos that aren't uploaded yet
+      if (isOwnVideo && !isUploadedToLearningTools)
+        IconButton(
+          icon: Icon(Icons.upload, color: Colors.blue, size: isSmallScreen ? 18 : 20),
+          onPressed: () {
+            _uploadVideoToLearningTools(video);
+          },
+          tooltip: 'Upload to Learning Tools',
+          padding: EdgeInsets.zero,
+          constraints: BoxConstraints(
+            minWidth: isSmallScreen ? 32 : 40,
+          ),
+        ),
+      // PLAY BUTTON
+      IconButton(
+        icon: Icon(Icons.play_circle_fill, color: Colors.red, size: isSmallScreen ? 24 : 30),
+        onPressed: () => _openYoutubeVideo(video['youtube_url']),
+        padding: EdgeInsets.zero,
+        constraints: BoxConstraints(
+          minWidth: isSmallScreen ? 32 : 40,
+        ),
+      ),
+    ],
+  ),
+),
             onTap: () => _openYoutubeVideo(video['youtube_url']),
           ),
         );
@@ -1679,7 +1651,6 @@ void _openYoutubeVideo(String youtubeUrl) async {
     );
   }
 
-  // Group quizzes by quiz_group_name
   final Map<String, List<Map<String, dynamic>>> groupedQuizzes = {};
   
   for (final quiz in _quizzes) {
@@ -1690,7 +1661,6 @@ void _openYoutubeVideo(String youtubeUrl) async {
     groupedQuizzes[groupName]!.add(quiz);
   }
 
-  // Convert to list of groups for easier rendering
   final List<MapEntry<String, List<Map<String, dynamic>>>> quizGroups = 
       groupedQuizzes.entries.toList()
         ..sort((a, b) => a.key.compareTo(b.key));
@@ -1835,29 +1805,42 @@ void _openYoutubeVideo(String youtubeUrl) async {
                       ),
                     ],
                   ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // EDIT BUTTON - only show for own quizzes
-                      if (isOwnQuiz)
-                        IconButton(
-                          icon: Icon(Icons.edit, color: Colors.blue, size: isSmallScreen ? 18 : 20),
-                          onPressed: () {
-                            _editQuiz(quiz);
-                          },
-                          tooltip: 'Edit Question',
-                        ),
-                      // DELETE BUTTON - only show for own quizzes
-                      if (isOwnQuiz)
-                        IconButton(
-                          icon: Icon(Icons.delete_outline, color: Colors.red, size: isSmallScreen ? 18 : 20),
-                          onPressed: () {
-                            _markQuizAsRemoved(quiz);
-                          },
-                          tooltip: 'Delete Question',
-                        ),
-                    ],
-                  ),
+          trailing: Container(
+  width: isSmallScreen ? 40 : 48, // Even smaller fixed width
+  child: Row(
+    mainAxisSize: MainAxisSize.min,
+    mainAxisAlignment: MainAxisAlignment.end,
+    children: [
+      if (isOwnQuiz)
+        GestureDetector(
+          onTap: () => _editQuiz(quiz),
+          child: Container(
+            width: isSmallScreen ? 18 : 22,
+            height: isSmallScreen ? 18 : 22,
+            margin: EdgeInsets.only(right: isSmallScreen ? 2 : 4),
+            child: Icon(
+              Icons.edit,
+              color: Colors.blue,
+              size: isSmallScreen ? 14 : 16,
+            ),
+          ),
+        ),
+      if (isOwnQuiz)
+        GestureDetector(
+          onTap: () => _markQuizAsRemoved(quiz),
+          child: Container(
+            width: isSmallScreen ? 18 : 22,
+            height: isSmallScreen ? 18 : 22,
+            child: Icon(
+              Icons.delete_outline,
+              color: Colors.red,
+              size: isSmallScreen ? 14 : 16,
+            ),
+          ),
+        ),
+    ],
+  ),
+),
                 ),
               );
             }),
@@ -1868,7 +1851,6 @@ void _openYoutubeVideo(String youtubeUrl) async {
   );
 }
 
-// Helper method to get question type display with color
 Color _getQuestionTypeColor(String questionType) {
   switch (questionType.toLowerCase()) {
     case 'essay':
@@ -1879,7 +1861,6 @@ Color _getQuestionTypeColor(String questionType) {
   }
 }
 
-// Helper method to get group question types summary
 String _getGroupQuestionTypes(List<Map<String, dynamic>> groupQuizzes) {
   final multipleChoiceCount = groupQuizzes.where((q) => _getQuestionType(q) == 'Multiple Choice').length;
   final essayCount = groupQuizzes.where((q) => _getQuestionType(q) == 'Essay').length;
@@ -1939,7 +1920,6 @@ String _getGroupQuestionTypes(List<Map<String, dynamic>> groupQuizzes) {
           size: size,
           color: Colors.green,
         );
-      // Video file icons
       case 'mp4': case 'avi': case 'mov': case 'wmv': case 'flv': case 'mkv': case 'webm':
         return Icon(Icons.videocam, size: size, color: Colors.purple);
       default:
@@ -1988,12 +1968,11 @@ String _getGroupQuestionTypes(List<Map<String, dynamic>> groupQuizzes) {
     try {
       debugPrint('🔄 Removing file from Learning Tools: ${file['title']}');
       
-      // ONLY remove from Learning Tools, don't mark as removed from resources
       final updateResponse = await supabase
           .from('resources')
           .update({
-            'is_uploaded_to_learning_tools': false, // Remove from learning tools
-            'uploaded_to_learning_tools_at': null, // Clear the upload timestamp
+            'is_uploaded_to_learning_tools': false, 
+            'uploaded_to_learning_tools_at': null, 
           })
           .eq('id', file['id'])
           .eq('user_id', _currentUserId)
@@ -2001,7 +1980,6 @@ String _getGroupQuestionTypes(List<Map<String, dynamic>> groupQuizzes) {
 
       debugPrint('✅ Update response: $updateResponse');
 
-      // Refresh both lists
       await _loadResources();
       await _loadUploadedFiles();
 
@@ -2016,7 +1994,6 @@ String _getGroupQuestionTypes(List<Map<String, dynamic>> groupQuizzes) {
     } catch (e) {
       debugPrint('❌ Error removing file from Learning Tools: $e');
       
-      // More detailed error logging
       if (e is PostgrestException) {
         debugPrint('📋 Postgrest Error Details:');
         debugPrint('   - Message: ${e.message}');
@@ -2070,7 +2047,6 @@ String _getGroupQuestionTypes(List<Map<String, dynamic>> groupQuizzes) {
                   ? 'Videos (${_videoUrls.length})'
                   : 'Video (${_videoUrls.length})',
             ),
-            // ADDED: Quizzes tab
             Tab(
               icon: Icon(Icons.quiz),
               text: isVerySmallScreen 
@@ -2332,7 +2308,7 @@ class _AddVideoUrlDialogState extends State<AddVideoUrlDialog> {
   }
 }
 
-// UPDATED: Removed YouTube option from resource dialog
+
 class AddResourceWithAttachmentDialog extends StatefulWidget {
   final Function(Map<String, dynamic>) onResourceAdded;
   final String currentUserId;
@@ -2396,7 +2372,7 @@ class _AddResourceWithAttachmentDialogState
   });
 
   try {
-    // Request permissions first
+
     final hasPermission = await _requestFilePermissions();
     
     if (!hasPermission) {
@@ -2415,14 +2391,12 @@ class _AddResourceWithAttachmentDialogState
       return;
     }
 
-    // Allow video files in addition to existing file types
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: [
         'pdf', 'doc', 'docx', 'txt', 
         'pptx', 'ppt', 'zip', 'rar',
         'jpg', 'jpeg', 'png', 'gif',
-        // Video formats
         'mp4', 'avi', 'mov', 'wmv', 'flv', 'mkv', 'webm'
       ],
       allowMultiple: false,
@@ -2455,7 +2429,6 @@ class _AddResourceWithAttachmentDialogState
 }
 Future<void> _handleSelectedFile(PlatformFile file) async {
   try {
-    // Check file size (limit to 10MB)
     const maxFileSize = 10 * 1024 * 1024;
     if (file.size > maxFileSize) {
       if (mounted) {
@@ -2471,7 +2444,6 @@ Future<void> _handleSelectedFile(PlatformFile file) async {
 
     Uint8List? fileBytes = file.bytes;
 
-    // If bytes are null, try to read from path
     if (fileBytes == null && file.path != null) {
       final fileObj = File(file.path!);
       if (await fileObj.exists()) {
@@ -2479,29 +2451,25 @@ Future<void> _handleSelectedFile(PlatformFile file) async {
       }
     }
 
-    if (fileBytes != null) {
-      final int fileSize = fileBytes.length; 
-      
-      setState(() {
-        _fileBytes = fileBytes;
-        _fileName = file.name;
-        _fileSize = fileSize;
-      });
+    final int fileSize = fileBytes!.length; 
+    
+    setState(() {
+      _fileBytes = fileBytes;
+      _fileName = file.name;
+      _fileSize = fileSize;
+    });
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'File selected: ${file.name} (${_formatFileSize(fileBytes.length)})',
-            ),
-            backgroundColor: Colors.green,
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'File selected: ${file.name} (${_formatFileSize(fileBytes.length)})',
           ),
-        );
-      }
-    } else {
-      throw Exception('Could not read file bytes');
+          backgroundColor: Colors.green,
+        ),
+      );
     }
-  } catch (e) {
+    } catch (e) {
     debugPrint('❌ Error handling selected file: $e');
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2517,12 +2485,10 @@ Future<void> _handleSelectedFile(PlatformFile file) async {
 Future<bool> _requestFilePermissions() async {
   try {
     if (Platform.isAndroid) {
-      // Check Android version
       final androidInfo = await DeviceInfoPlugin().androidInfo;
       final sdkVersion = androidInfo.version.sdkInt;
 
       if (sdkVersion >= 33) {
-        // Android 13+ - request new media permissions
         final Map<Permission, PermissionStatus> statuses = await [
           Permission.photos,
           Permission.videos,
@@ -2532,7 +2498,6 @@ Future<bool> _requestFilePermissions() async {
         final allGranted = statuses.values.every((status) => status.isGranted);
         
         if (!allGranted) {
-          // If not all granted, try with storage permission as fallback
           final storageStatus = await Permission.storage.request();
           return storageStatus.isGranted;
         }
@@ -2834,7 +2799,6 @@ class _QuizCreationDialogState extends State<QuizCreationDialog> {
   if (_isSubmitting) return;
   
   if (_formKey.currentState!.validate()) {
-    // Validate quiz metadata
     if (_quizNameController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -2845,11 +2809,9 @@ class _QuizCreationDialogState extends State<QuizCreationDialog> {
       return;
     }
 
-    // Validate all questions
     for (int i = 0; i < _questions.length; i++) {
       final question = _questions[i];
       
-      // Debug print to see what's in the question
       debugPrint('🔄 Validating question ${i + 1}: "${question.question}"');
       debugPrint('   - Answers: ${question.answers}');
       debugPrint('   - Correct answers: ${question.correctAnswers}');
@@ -2865,9 +2827,7 @@ class _QuizCreationDialogState extends State<QuizCreationDialog> {
         return;
       }
 
-      // Only validate answers for multiple choice questions
       if (question.type == 'multiple_choice') {
-        // Check if at least one answer is marked as correct
         bool hasCorrectAnswer = question.correctAnswers.contains(true);
         debugPrint('   - Has correct answer: $hasCorrectAnswer');
         
@@ -2881,7 +2841,6 @@ class _QuizCreationDialogState extends State<QuizCreationDialog> {
           return;
         }
 
-        // Check if all answer fields are filled
         for (int j = 0; j < question.answers.length; j++) {
           debugPrint('   - Answer ${j + 1}: "${question.answers[j]}"');
           if (question.answers[j].isEmpty) {
@@ -2908,11 +2867,8 @@ class _QuizCreationDialogState extends State<QuizCreationDialog> {
         finalCategory = _selectedCategory;
       }
 
-    // Get current user's username
     final currentUser = Supabase.instance.client.auth.currentUser;
     final createdBy = currentUser?.email?.split('@').first ?? 'User';
-
-    // Create the main quiz data with grouped questions
     final Map<String, dynamic> quizData = {
       'name': _quizNameController.text,
       'category': finalCategory,
@@ -3219,7 +3175,7 @@ class _QuizCreationDialogState extends State<QuizCreationDialog> {
                   hintText: 'Enter quiz name...',
                 ),
                 onChanged: (value) {
-                  setState(() {}); // Refresh to update title
+                  setState(() {}); 
                 },
               ),
               SizedBox(height: isSmallScreen ? 16 : 20),
@@ -3286,7 +3242,6 @@ class _QuizCreationDialogState extends State<QuizCreationDialog> {
               // Questions List
               ...List.generate(_questions.length, (index) => _buildQuestionCard(index)),
 
-              // Add More Buttons
               Column(
                 children: [
                   // Add More Questions Button
@@ -3427,7 +3382,6 @@ class _QuizCreationDialogState extends State<QuizCreationDialog> {
   }
 }
 
-// Simple data class without controllers for better performance
 class QuizQuestionData {
   final String question;
   final List<String> answers;
@@ -3488,25 +3442,19 @@ class _QuizEditDialogState extends State<QuizEditDialog> {
   }
 
   void _initializeForm() {
-    // Initialize question
     _questionController.text = widget.quiz['question'] ?? '';
-    
-    // Initialize category
     _selectedCategory = widget.quiz['category'] ?? 'Python';
     if (!['Python', 'Java', 'C#'].contains(_selectedCategory)) {
       _customCategory = _selectedCategory;
       _selectedCategory = 'null';
     }
     
-    // Initialize question type
     _questionType = widget.quiz['question_type'] ?? 'multiple_choice';
     
-    // Initialize answers for multiple choice questions
     if (_questionType == 'multiple_choice') {
       final answers = List<String>.from(widget.quiz['answers'] ?? []);
       final correctAnswers = List<String>.from(widget.quiz['correct_answers'] ?? []);
       
-      // Initialize 4 answer fields
       for (int i = 0; i < 4; i++) {
         _answerControllers.add(TextEditingController(
           text: i < answers.length ? answers[i] : ''
@@ -3519,7 +3467,6 @@ class _QuizEditDialogState extends State<QuizEditDialog> {
   void _updateQuiz() {
     if (_formKey.currentState!.validate()) {
       if (_questionType == 'multiple_choice') {
-        // Validate that at least one answer is marked as correct
         if (!_correctAnswers.contains(true)) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -3530,7 +3477,6 @@ class _QuizEditDialogState extends State<QuizEditDialog> {
           return;
         }
 
-        // Validate that all answer fields are filled
         for (int i = 0; i < _answerControllers.length; i++) {
           if (_answerControllers[i].text.isEmpty) {
             ScaffoldMessenger.of(context).showSnackBar(

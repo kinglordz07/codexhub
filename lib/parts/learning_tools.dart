@@ -24,7 +24,6 @@ class _LearningToolsState extends State<LearningTools> {
   Map<String, List<String>> _videoIds = {};
   List<Map<String, dynamic>> _videoData = []; 
 
-  // Quiz state
   int _quizIndex = 0;
   int _score = 0;
   bool _quizFinished = false;
@@ -66,6 +65,15 @@ class _LearningToolsState extends State<LearningTools> {
     _articlesSubscription = client
         .from('articles')
         .stream(primaryKey: ['id'])
+        .asyncMap((List<Map<String, dynamic>> data) async {
+          // Enrich each article with profile information
+          final enrichedArticles = <Map<String, dynamic>>[];
+          for (final article in data) {
+            final enrichedArticle = await _enrichArticleWithProfile(article, client);
+            enrichedArticles.add(enrichedArticle);
+          }
+          return enrichedArticles;
+        })
         .listen(
           (List<Map<String, dynamic>> data) {
             setState(() {
@@ -78,6 +86,44 @@ class _LearningToolsState extends State<LearningTools> {
         );
   }
 
+  Future<Map<String, dynamic>> _enrichArticleWithProfile(
+      Map<String, dynamic> article, SupabaseClient client) async {
+    try {
+      debugPrint('Article keys: ${article.keys.toList()}');
+      debugPrint('Article data: $article');
+      
+      // Try to get user_id from article
+      final userId = article['user_id'] ?? article['uploaded_by'];
+      
+      if (userId != null && userId.toString().isNotEmpty) {
+        try {
+          // Fetch the user profile from profiles_new
+          final profileData = await client
+              .from('profiles_new')
+              .select('username, full_name')
+              .eq('id', userId)
+              .single();
+          
+          debugPrint('Profile found: $profileData');
+          
+          // Add profile to article with the correct key name
+          return {
+            ...article,
+            'profiles_new': profileData,
+          };
+        } catch (e) {
+          debugPrint('Error fetching profile for userId $userId: $e');
+        }
+      } else {
+        debugPrint('No userId found in article. user_id: ${article['user_id']}, uploaded_by: ${article['uploaded_by']}');
+      }
+    } catch (e) {
+      debugPrint('Error enriching article with profile: $e');
+    }
+    
+    return article;
+  }
+
   Future<void> _refreshData() async {
     setState(() {
       _isLoading = true;
@@ -87,7 +133,7 @@ class _LearningToolsState extends State<LearningTools> {
 
   Future<void> _downloadFile(Map<String, dynamic> article) async {
     if (!article['has_valid_file']) {
-      _showSnackBar('No file available for download', Colors.orange);
+      _showSnackBar('No file available for view', Colors.orange);
       return;
     }
 
@@ -95,16 +141,14 @@ class _LearningToolsState extends State<LearningTools> {
     final String fileName = article['file_name'];
 
     try {
-      _showSnackBar('Downloading $fileName...', Colors.blue);
+      _showSnackBar('Opening $fileName...', Colors.blue);
       
-      // Download to private storage (no permissions needed)
       await _downloadToPrivateStorage(filePath, fileName);
       
     } catch (e) {
-      ('❌ Download failed: $e');
-      _showSnackBar('Download failed. Please try again.', Colors.red);
+      ('❌ View failed: $e');
+      _showSnackBar('View failed. Please try again.', Colors.red);
       
-      // Fallback: Try public URL
       await _tryPublicUrlFallback(filePath);
     }
   }
@@ -114,7 +158,6 @@ Future<void> _downloadToPrivateStorage(String filePath, String fileName) async {
       
       final supabase = Supabase.instance.client;
       
-      // Download file bytes
       final Uint8List fileData = await supabase.storage
           .from('learning_files')
           .download(filePath);
@@ -123,11 +166,9 @@ Future<void> _downloadToPrivateStorage(String filePath, String fileName) async {
         throw Exception('Downloaded file is empty');
       }
 
-      // Save to app's private directory (no permissions needed)
       final directory = await getApplicationDocumentsDirectory();
       final downloadsDir = Directory('${directory.path}/CodexHub_Downloads');
       
-      // Create downloads folder if it doesn't exist
       if (!await downloadsDir.exists()) {
         await downloadsDir.create(recursive: true);
       }
@@ -138,20 +179,17 @@ Future<void> _downloadToPrivateStorage(String filePath, String fileName) async {
       ('✅ Download successful!');
       ('📁 File saved to: ${localFile.path}');
       
-      _showSnackBar('Download completed!', Colors.green);
       
-      // Auto-open the file
       final result = await OpenFilex.open(localFile.path);
       ('🔗 Open file result: ${result.message}');
       
-      // If opening fails, show options
       if (result.type != ResultType.done) {
         _showFileOptionsDialog(localFile.path, fileName);
       }
       
     } catch (e) {
       ('❌ Private storage download failed: $e');
-      rethrow; // Re-throw to trigger fallback
+      rethrow; 
     }
   }
 Future<void> _tryPublicUrlFallback(String filePath) async {
@@ -210,7 +248,7 @@ Future<void> _tryPublicUrlFallback(String filePath) async {
               subtitle: const Text('Share with other apps'),
               onTap: () {
                 Navigator.pop(context);
-                _showFileLocation(filePath); // For now, show location
+                _showFileLocation(filePath); 
               },
             ),
           ],
@@ -278,14 +316,12 @@ Future<void> _testStorageConnection() async {
       final client = Supabase.instance.client;
       debugPrint('🔧 Testing storage connection...');
       
-      // List available buckets
       final buckets = await client.storage.listBuckets();
       debugPrint('📦 Available buckets:');
       for (final bucket in buckets) {
         debugPrint('   - ${bucket.name} (id: ${bucket.id})');
       }
       
-      // Test file existence for our target file
       final fileName = '1761797210317_Thank you for using Documents.docx';
       debugPrint('\n🔎 Testing file existence for: $fileName');
       
@@ -316,14 +352,12 @@ Future<void> _testStorageConnection() async {
       
       debugPrint('🔍 DEBUG: Checking bucket contents...');
       
-      // Check learning_files bucket
       try {
         final learningFiles = await client.storage.from('learning_files').list();
         debugPrint('📁 Files in learning_files bucket (${learningFiles.length}):');
         for (final file in learningFiles) {
           debugPrint('   - ${file.name}');
           
-          // If it's a folder, list its contents
           if (file.name == 'codexhub' || file.name.endsWith('/')) {
             try {
               final folderFiles = await client.storage.from('learning_files').list(path: file.name);
@@ -340,7 +374,6 @@ Future<void> _testStorageConnection() async {
         debugPrint('❌ Error accessing learning_files bucket: $e');
       }
       
-      // Check resources bucket
       try {
         final resourcesFiles = await client.storage.from('resources').list();
         debugPrint('📁 Files in resources bucket (${resourcesFiles.length}):');
@@ -432,12 +465,25 @@ Future<void> _testStorageConnection() async {
     try {
       final client = Supabase.instance.client;
 
-      final articlesResponse = await client
-          .from('articles')
-          .select()
-          .order('created_at', ascending: false);
+      // Try to load articles with profile join, fall back to without join if it fails
+      List<Map<String, dynamic>> articlesResponse = [];
+      try {
+        articlesResponse = await client
+            .from('articles')
+            .select('''
+              *,
+              profiles_new:user_id (username, full_name)
+            ''')
+            .order('created_at', ascending: false);
+      } catch (e) {
+        debugPrint('Error loading articles with profiles_new join: $e, trying without join...');
+        // Fallback: load without the join
+        articlesResponse = await client
+            .from('articles')
+            .select('*')
+            .order('created_at', ascending: false);
+      }
 
-      // Load uploaded videos from video_urls table
       List<Map<String, dynamic>> videosResponse = [];
       try {
         videosResponse = await client
@@ -504,6 +550,8 @@ Future<void> _testStorageConnection() async {
       mentors.sort();
 
       final processedArticles = _processArticles(articlesResponse);
+      
+      debugPrint('Loaded data - Articles: ${articlesResponse.length}, Videos: ${videosResponse.length}, Quizzes: ${quizResponse.length}');
 
       setState(() {
         _articles = processedArticles;
@@ -541,6 +589,7 @@ Future<void> _testStorageConnection() async {
         _isLoading = false;
       });
     } catch (e) {
+      debugPrint('Error loading content: $e');
       setState(() {
         _articles = _generateFallbackArticles();
         _videoIds = {
@@ -731,7 +780,6 @@ Future<void> _testStorageConnection() async {
       return;
     }
 
-    // Use the mentor's quizzes
     final List<Map<String, dynamic>> filteredQuestions = List<Map<String, dynamic>>.from(mentorQuizzes);
 
     if (filteredQuestions.isEmpty) {
@@ -766,24 +814,87 @@ Future<void> _testStorageConnection() async {
   }
 
   String _extractMentorName(Map<String, dynamic> data) {
+    debugPrint('=== _extractMentorName DEBUG ===');
+    debugPrint('All data keys: ${data.keys.toList()}');
+    debugPrint('user_id: ${data['user_id']}');
+    debugPrint('profiles_new: ${data['profiles_new']}');
+    debugPrint('profiles: ${data['profiles']}');
+    
+    // Try to get from profiles_new (the correct table)
+    if (data['profiles_new'] != null) {
+      final profile = data['profiles_new'];
+      debugPrint('profiles_new is Map: ${profile is Map<String, dynamic>}');
+      if (profile is Map<String, dynamic>) {
+        debugPrint('profiles_new keys: ${profile.keys.toList()}');
+        debugPrint('profiles_new username: ${profile['username']}');
+        debugPrint('profiles_new full_name: ${profile['full_name']}');
+        
+        if (profile['username'] != null && profile['username'].toString().isNotEmpty) {
+          final result = profile['username'].toString();
+          debugPrint('Returning from profiles_new.username: $result');
+          return result;
+        } else if (profile['full_name'] != null && profile['full_name'].toString().isNotEmpty) {
+          final result = profile['full_name'].toString();
+          debugPrint('Returning from profiles_new.full_name: $result');
+          return result;
+        }
+      }
+    }
+    
+    // Try to get from nested profiles object (fallback, from join)
+    if (data['profiles'] != null) {
+      final profile = data['profiles'];
+      debugPrint('profiles is Map: ${profile is Map<String, dynamic>}');
+      if (profile is Map<String, dynamic>) {
+        debugPrint('profiles keys: ${profile.keys.toList()}');
+        debugPrint('profiles username: ${profile['username']}');
+        debugPrint('profiles full_name: ${profile['full_name']}');
+        
+        if (profile['username'] != null && profile['username'].toString().isNotEmpty) {
+          final result = profile['username'].toString();
+          debugPrint('Returning from profiles.username: $result');
+          return result;
+        } else if (profile['full_name'] != null && profile['full_name'].toString().isNotEmpty) {
+          final result = profile['full_name'].toString();
+          debugPrint('Returning from profiles.full_name: $result');
+          return result;
+        }
+      }
+    }
+    
+    // Fallback: try other fields
     if (data['mentor_name'] != null && data['mentor_name'].toString().isNotEmpty) {
-      return data['mentor_name'].toString();
+      final result = data['mentor_name'].toString();
+      debugPrint('Returning from mentor_name: $result');
+      return result;
     } else if (data['uploaded_by_name'] != null && data['uploaded_by_name'].toString().isNotEmpty) {
-      return data['uploaded_by_name'].toString();
+      final result = data['uploaded_by_name'].toString();
+      debugPrint('Returning from uploaded_by_name: $result');
+      return result;
     } else if (data['user_name'] != null && data['user_name'].toString().isNotEmpty) {
-      return data['user_name'].toString();
+      final result = data['user_name'].toString();
+      debugPrint('Returning from user_name: $result');
+      return result;
     } else if (data['display_uploaded_by'] != null && data['display_uploaded_by'].toString().isNotEmpty) {
-      return data['display_uploaded_by'].toString();
+      final result = data['display_uploaded_by'].toString();
+      debugPrint('Returning from display_uploaded_by: $result');
+      return result;
     } else if (data['uploaded_by'] != null && data['uploaded_by'].toString().isNotEmpty) {
       final uploadedBy = data['uploaded_by'].toString();
       if (uploadedBy.contains('@')) {
+        debugPrint('Returning from uploaded_by (email): $uploadedBy');
         return uploadedBy;
       } else if (uploadedBy.length > 8) {
-        return 'User ${uploadedBy.substring(0, 8)}...';
+        final result = 'User ${uploadedBy.substring(0, 8)}...';
+        debugPrint('Returning from uploaded_by (substring): $result');
+        return result;
       } else {
-        return 'User $uploadedBy';
+        final result = 'User $uploadedBy';
+        debugPrint('Returning from uploaded_by (full): $result');
+        return result;
       }
     }
+    debugPrint('Falling back to CodexHub Mentor');
     return 'CodexHub Mentor';
   }
 
@@ -797,7 +908,6 @@ Future<void> _testStorageConnection() async {
         }
       }
       
-      // Fallback to uploaded_by
       final uploadedBy = video['uploaded_by'];
       if (uploadedBy != null) {
         final uploadedByStr = uploadedBy.toString();
@@ -825,7 +935,7 @@ Future<void> _testStorageConnection() async {
     } catch (e) {
       debugPrint('Error parsing upload time: $e');
     }
-    return 'Recently';
+    return 'Unknown Date';
   }
 
   Widget _buildArticleCard(Map<String, dynamic> article) {
@@ -836,8 +946,13 @@ Future<void> _testStorageConnection() async {
     String content = article['content']?.toString() ?? "";
     String preview = content.length > 80 ? "${content.substring(0, 80)}..." : content;
 
-    String uploadedBy = _extractMentorName(article);
-    String uploadedAt = _formatUploadTime(article['uploaded_at']);
+    // Use the pre-extracted mentor name from _processArticles
+    String uploadedBy = article['display_uploaded_by']?.toString() ?? _extractMentorName(article);
+    String uploadedAt = _formatUploadTime(article['created_at'] ?? article['uploaded_at']);
+    
+    debugPrint('Article card - uploadedBy: $uploadedBy, uploadedAt: $uploadedAt');
+    debugPrint('Article card - display_uploaded_by: ${article['display_uploaded_by']}');
+    debugPrint('Article card - mentor_name: ${article['mentor_name']}');
 
     bool hasValidFile = article['has_valid_file'] == true;
     String? fileName = article['file_name']?.toString();
@@ -917,9 +1032,9 @@ Future<void> _testStorageConnection() async {
             ],
           ),
           trailing: hasValidFile ? IconButton(
-            icon: Icon(Icons.download, color: Colors.green, size: isSmallScreen ? 20 : 24),
+            icon: Icon(Icons.visibility, color: Colors.green, size: isSmallScreen ? 20 : 24),
             onPressed: () => _downloadFile(article),
-            tooltip: 'Download $fileName',
+            tooltip: 'View $fileName',
           ) : null,
           children: [
             Padding(
@@ -957,8 +1072,8 @@ Future<void> _testStorageConnection() async {
                               width: double.infinity,
                               child: ElevatedButton.icon(
                                 onPressed: () => _downloadFile(article),
-                                icon: Icon(Icons.download, size: isSmallScreen ? 18 : 20),
-                                label: Text('Download File', style: TextStyle(fontSize: isSmallScreen ? 14 : 16)),
+                                icon: Icon(Icons.visibility, size: isSmallScreen ? 18 : 20),
+                                label: Text('View File', style: TextStyle(fontSize: isSmallScreen ? 14 : 16)),
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: Colors.green,
                                   foregroundColor: Colors.white,
@@ -1207,10 +1322,8 @@ Future<void> _testStorageConnection() async {
       final correctAnswers = List<String>.from(currentQuestion['correct_answers'] ?? []);
       isCorrect = correctAnswers.contains(answer);
     } else {
-      // For essay questions, always mark as correct (manual grading)
       isCorrect = true;
       
-      // Clear the essay controller after submission
       if (_essayControllers.containsKey(_quizIndex)) {
         _essayControllers[_quizIndex]!.clear();
       }
@@ -1269,7 +1382,6 @@ Future<void> _testStorageConnection() async {
       _showCategorySelection = true;
       _selectedMentor = null;
       
-      // Clear any ongoing quiz state
       _quizIndex = 0;
       _score = 0;
       _quizTimeSeconds = 0;
@@ -1277,7 +1389,6 @@ Future<void> _testStorageConnection() async {
       _showAnswerFeedback = false;
       _answeredQuestions.clear();
       
-      // Dispose essay controllers
       for (var controller in _essayControllers.values) {
         controller.dispose();
       }
@@ -1749,7 +1860,7 @@ Future<void> _testStorageConnection() async {
           ),
         ],
         
-        // Quiz content - using a regular Column instead of Expanded
+        // Quiz content 
         Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1889,7 +2000,7 @@ Future<void> _testStorageConnection() async {
               ),
             ),
             SizedBox(width: isSmallScreen ? 12 : 16),
-            // New quiz same mentor button
+            // New quiz 
             Expanded(
               child: ElevatedButton(
                 onPressed: _resetQuiz,
@@ -2031,7 +2142,6 @@ Future<void> _testStorageConnection() async {
                 else
                   _buildQuizQuestion(),
                 
-                // Only show progress for active quizzes
                 if (_quizStarted && !_quizFinished) ...[
                   SizedBox(height: isSmallScreen ? 16 : 20),
                   LinearProgressIndicator(

@@ -106,15 +106,12 @@ class _MentorFriendPageState extends State<MentorFriendPage> {
     }
   }
 
-  // Enhanced message notification tracking
 final Map<String, int> _unreadMessagesByFriend = {};
 
 Future<void> _checkUnreadMessages() async {
   try {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return;
-
-    // Get all unread messages
     final response = await supabase
         .from('mentor_messages')
         .select('sender_id')
@@ -126,7 +123,6 @@ Future<void> _checkUnreadMessages() async {
         _unreadMessagesByFriend.clear();
         _unreadMessagesCount = 0;
         
-        // Manually group by sender_id
         final Map<String, int> messageCounts = {};
         for (final item in response) {
           final senderId = item['sender_id']?.toString();
@@ -148,11 +144,9 @@ void _setupMessageNotificationListener() {
   final userId = supabase.auth.currentUser?.id;
   if (userId == null) return;
 
-  // Cancel existing subscriptions if any
   _messagesSub?.cancel();
   _callsSub?.cancel();
 
-  // Enhanced message listener that also listens for read status changes
   _messagesSub = supabase
       .from('mentor_messages')
       .stream(primaryKey: ['id'])
@@ -164,21 +158,16 @@ void _setupMessageNotificationListener() {
       final senderId = message['sender_id']?.toString();
       final isRead = message['is_read'] ?? true;
       
-      // If this message is for current user
       if (receiverId == userId) {
         if (!isRead) {
-          // New unread message
           _handleNewMessageNotification(senderId, message);
           shouldUpdate = true;
         } else {
-          // Message was marked as read (possibly from chat screen)
           debugPrint('📖 Message marked as read from $senderId');
           shouldUpdate = true;
         }
       }
     }
-    
-    // Refresh unread counts if any message status changed
     if (shouldUpdate) {
       _checkUnreadMessages();
     }
@@ -186,7 +175,6 @@ void _setupMessageNotificationListener() {
     debugPrint('❌ Message stream error: $error');
   });
 
-  // Call notification listener
   _callsSub = supabase
       .from('call_notifications') 
       .stream(primaryKey: ['id'])
@@ -196,7 +184,6 @@ void _setupMessageNotificationListener() {
     debugPrint('❌ Call notifications stream error: $error');
   });
 
-  // Periodic updates to ensure sync
   Timer.periodic(Duration(seconds: 30), (timer) {
     if (mounted) {
       _updateNotificationCounts();
@@ -206,11 +193,9 @@ void _setupMessageNotificationListener() {
 
 void _handleNewMessageNotification(String? senderId, Map<String, dynamic> message) {
   if (senderId == null) return;
-  
-  // Update counts
+
   _checkUnreadMessages();
   
-  // Show notification if app is in background
   _showMessageNotification(senderId, message);
 }
 
@@ -218,10 +203,8 @@ void _showMessageNotification(String senderId, Map<String, dynamic> message) {
   final content = message['content']?.toString() ?? 'New message';
   final senderName = message['sender_username']?.toString() ?? 'Someone';
   
-  // You can integrate with flutter_local_notifications package here
   debugPrint('🔔 New message from $senderName: $content');
   
-  // Optional: Show in-app snackbar if user is on a different screen
   if (mounted && ModalRoute.of(context)?.settings.name != '/chat') {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -263,10 +246,9 @@ void _showMessageNotification(String senderId, Map<String, dynamic> message) {
   }
 }
 Future<void> _navigateToChatFromNotification(String userId, String userName) async {
-  // Mark messages as read when navigating to chat
+
   await _markMessagesAsRead(userId);
-  
-  // Wait a brief moment for state to update
+
   await Future.delayed(Duration(milliseconds: 100));
   
   if (mounted) {
@@ -289,7 +271,6 @@ Future<void> _navigateToChatFromNotification(String userId, String userName) asy
 
     debugPrint('📖 Marking messages as read from sender: $senderId');
     
-    // Update messages in database - CORRECTED SYNTAX
     final response = await supabase
         .from('mentor_messages')
         .update({'is_read': true})
@@ -297,17 +278,14 @@ Future<void> _navigateToChatFromNotification(String userId, String userName) asy
         .eq('sender_id', senderId)
         .eq('is_read', false);
 
-    // Check for errors using the response
     if (response.error != null) {
       debugPrint('❌ Database error marking messages as read: ${response.error!.message}');
       return;
     }
 
-    // Update local state immediately
     if (mounted) {
       setState(() {
         _unreadMessagesByFriend.remove(senderId);
-        // Recalculate total unread count
         _unreadMessagesCount = _unreadMessagesByFriend.values.fold(0, (sum, count) => sum + count);
         _hasNewNotifications = _pendingRequestsCount > 0 || _unreadMessagesCount > 0 || _missedCallsCount > 0;
       });
@@ -340,8 +318,6 @@ Future<void> _navigateToChatFromNotification(String userId, String userName) asy
     debugPrint('❌ Error checking missed calls: $e');
   }
 }
-
-
 
   Future<void> _initializeData() async {
     if (_isLoading) return;
@@ -551,7 +527,6 @@ Future<void> _navigateToChatFromNotification(String userId, String userName) asy
     );
   }
 
-  /// ✅ NEW: Build notification indicator (red exclamation point)
   Widget _buildNotificationIndicator() {
     return Container(
       width: 12,
@@ -588,7 +563,6 @@ Future<void> _navigateToChatFromNotification(String userId, String userName) asy
                 style: TextStyle(fontSize: titleFontSize),
               ),
               SizedBox(width: 8),
-              // ✅ NEW: Main notification indicator
               if (_hasNewNotifications) _buildNotificationIndicator(),
             ],
           ),
@@ -608,7 +582,6 @@ Future<void> _navigateToChatFromNotification(String userId, String userName) asy
                 icon: Stack(
                   children: [
                     Icon(Icons.person_add, size: iconSize - 4),
-                    // ✅ NEW: Notification badge for requests tab
                     Positioned(
                       top: 0,
                       right: 0,
@@ -622,7 +595,6 @@ Future<void> _navigateToChatFromNotification(String userId, String userName) asy
                 icon: Stack(
                   children: [
                     Icon(Icons.people, size: iconSize - 4),
-                    // ✅ NEW: Notification badge for friends tab (messages)
                     Positioned(
                       top: 0,
                       right: 0,
@@ -641,7 +613,6 @@ Future<void> _navigateToChatFromNotification(String userId, String userName) asy
         ),
         body: Column(
           children: [
-            // ✅ ENHANCED: Mobile-optimized search bar
             Padding(
               padding: EdgeInsets.all(isSmallScreen ? 8.0 : 12.0),
               child: Container(
@@ -668,26 +639,23 @@ Future<void> _navigateToChatFromNotification(String userId, String userName) asy
               ),
             ),
 
-            // ✅ ENHANCED: Better loading indicators
             if (_isLoading && !_isRefreshing)
               LinearProgressIndicator(
                 backgroundColor: Colors.grey.shade200,
                 valueColor: AlwaysStoppedAnimation<Color>(Colors.indigo),
               ),
 
-            
-            // ✅ NEW: Notification summary bar
-if (_hasNewNotifications && !_isLoading)
-  GestureDetector(
-    onTap: _showNotificationDetails,
-    child: Container(
-      width: double.infinity,
-      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.orange.shade50,
-        border: Border.all(color: Colors.orange.shade200),
-        borderRadius: BorderRadius.circular(8),
-      ),
+            if (_hasNewNotifications && !_isLoading)
+               GestureDetector(
+               onTap: _showNotificationDetails,
+                 child: Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                    color: Colors.orange.shade50,
+                    border: Border.all(color: Colors.orange.shade200),
+                    borderRadius: BorderRadius.circular(8),
+                ),
       margin: EdgeInsets.symmetric(horizontal: isSmallScreen ? 8 : 12, vertical: 4),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -941,8 +909,6 @@ Widget _buildNotificationDetailItem(IconData icon, String title, String subtitle
     );
   }
 
-  // ========== ✅ ENHANCED: MOBILE-OPTIMIZED CARD WIDGETS ==========
-
   Widget _buildRequestCard({
     required String username,
     required String role,
@@ -1153,7 +1119,7 @@ Widget _buildNotificationDetailItem(IconData icon, String title, String subtitle
           : Colors.grey.shade200,
       child: avatarUrl.isEmpty
           ? Text(
-              username[0].toUpperCase(),
+              username.isNotEmpty ? username[0].toUpperCase() : '?',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: isSmallScreen ? 14 : 16,
@@ -1222,8 +1188,6 @@ Widget _buildNotificationDetailItem(IconData icon, String title, String subtitle
     );
   }
 
-  // ========== ✅ ENHANCED: MORE STABLE ACTION HANDLERS ==========
-
   Future<void> _handleAcceptRequest(String requestId, String senderId, String username) async {
     try {
       debugPrint('✅ Accepting request from $username...');
@@ -1267,10 +1231,8 @@ Widget _buildNotificationDetailItem(IconData icon, String title, String subtitle
       return;
     }
     
-    // Mark messages as read BEFORE navigating
     await _markMessagesAsRead(senderId);
     
-    // Wait for state update
     await Future.delayed(Duration(milliseconds: 100));
     
     if (!mounted) return;
@@ -1291,10 +1253,8 @@ Widget _buildNotificationDetailItem(IconData icon, String title, String subtitle
       return;
     }
     
-    // Mark messages as read BEFORE navigating
     await _markMessagesAsRead(id);
     
-    // Wait for state update
     await Future.delayed(Duration(milliseconds: 100));
     
     if (!mounted) return;

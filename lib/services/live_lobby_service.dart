@@ -5,7 +5,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class LiveLobbyService {
   final SupabaseClient _supabase = Supabase.instance.client;
 
-  /// 🔹 FIXED: Fetch all mentors from profiles_new table
   Future<List<Map<String, dynamic>>> fetchMentors() async {
     try {
       print('🟡 fetchMentors: Fetching mentors from profiles_new...');
@@ -25,7 +24,7 @@ class LiveLobbyService {
     }
   }
 
-  /// 🔹 FIXED: Create live session + invitation with profiles_new table
+
   Future<Map<String, dynamic>?> createLiveSession(
     String menteeId,
     String mentorId,
@@ -35,12 +34,11 @@ class LiveLobbyService {
     try {
       print('🟡 createLiveSession: Starting for mentee: $menteeId, mentor: $mentorId');
 
-      // FIXED: Get mentee name from profiles_new if not provided
       String finalMenteeName = menteeName;
       if (menteeName.isEmpty) {
         print('🟡 createLiveSession: Fetching mentee name from profiles_new...');
         final profileRes = await _supabase
-            .from('profiles_new') // FIXED: Use profiles_new
+            .from('profiles_new')
             .select('username')
             .eq('id', menteeId)
             .maybeSingle();
@@ -49,7 +47,7 @@ class LiveLobbyService {
         print('🟢 createLiveSession: Found mentee name: $finalMenteeName');
       }
 
-      // Generate room name
+
       final roomName = 'Live Session with $finalMenteeName';
 
       print('🟡 createLiveSession: Creating room...');
@@ -58,7 +56,7 @@ class LiveLobbyService {
           .insert({
             'name': roomName,
             'creator_id': menteeId,
-            'is_public': false, // FIXED: Changed to false for privacy
+            'is_public': false, 
             'description': 'Live coding session',
           })
           .select()
@@ -72,7 +70,6 @@ class LiveLobbyService {
         return null;
       }
 
-      // Add mentee as room member
       print('🟡 createLiveSession: Adding mentee to room members...');
       await _supabase.from('room_members').insert({
         'room_id': roomId,
@@ -87,9 +84,9 @@ class LiveLobbyService {
             'mentee_id': menteeId,
             'mentor_id': mentorId,
             'code': '// Welcome to the live coding session!\n// Start coding together...',
-            'is_live': true, // FIXED: Set to true when mentor is invited
+            'is_live': true, 
             'language': 'python',
-            'waiting': false, // FIXED: Not waiting since mentor is directly invited
+            'waiting': false, 
           })
           .select('id')
           .single();
@@ -102,7 +99,6 @@ class LiveLobbyService {
         return null;
       }
 
-      // FIXED: Create invitation record
       print('🟡 createLiveSession: Creating invitation...');
       await _supabase.from('live_invitations').insert({
         'session_id': sessionId,
@@ -130,13 +126,126 @@ class LiveLobbyService {
     }
   }
 
-  /// 🔹 FIXED: Fetch mentor profile from profiles_new
+  Future<Map<String, dynamic>?> updateExistingRoomSession(
+    String existingRoomId,
+    String menteeId,
+    String mentorId,
+    String roomName, {
+    String message = '',
+  }) async {
+    try {
+      print('🔄 updateExistingRoomSession: Updating existing room session: $existingRoomId');
+      
+      final room = await _supabase
+          .from('rooms')
+          .select()
+          .eq('id', existingRoomId)
+          .maybeSingle();
+
+      if (room == null) {
+        throw Exception('Room not found: $existingRoomId');
+      }
+
+      final existingSession = await _supabase
+          .from('live_sessions')
+          .select()
+          .eq('room_id', existingRoomId)
+          .maybeSingle();
+
+      String sessionId;
+
+      if (existingSession != null) {
+
+        sessionId = existingSession['id'].toString();
+        
+        await _supabase
+            .from('live_sessions')
+            .update({
+              'mentee_id': menteeId,
+              'mentor_id': mentorId,
+              'is_live': false,
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
+            })
+            .eq('id', sessionId);
+            
+        print('✅ updateExistingRoomSession: Updated existing session: $sessionId');
+      } else {
+
+        final newSession = await _supabase
+            .from('live_sessions')
+            .insert({
+              'room_id': existingRoomId,
+              'mentee_id': menteeId,
+              'mentor_id': mentorId,
+              'is_live': false,
+              'code': '// Welcome to collaboration room!\n// Start coding...',
+              'language': 'python',
+              'created_at': DateTime.now().toUtc().toIso8601String(),
+            })
+            .select()
+            .single();
+            
+        sessionId = newSession['id'].toString();
+        print('✅ updateExistingRoomSession: Created new session in existing room: $sessionId');
+      }
+
+      final existingMembership = await _supabase
+          .from('room_members')
+          .select()
+          .eq('room_id', existingRoomId)
+          .eq('user_id', menteeId)
+          .maybeSingle();
+
+      if (existingMembership == null) {
+        await _supabase.from('room_members').insert({
+          'room_id': existingRoomId,
+          'user_id': menteeId,
+        });
+        print('✅ updateExistingRoomSession: Added mentee to room members');
+      }
+
+      print('🟡 updateExistingRoomSession: Creating invitation...');
+      await _supabase.from('live_invitations').insert({
+        'session_id': sessionId,
+        'mentor_id': mentorId,
+        'mentee_id': menteeId,
+        'mentee_name': roomName.replaceAll('Live Session with ', ''),
+        'message': message,
+        'status': 'pending',
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+      });
+
+      if (message.isNotEmpty) {
+        await _supabase.from('room_messages').insert({
+          'room_id': existingRoomId,
+          'user_id': menteeId,
+          'content': 'Invitation to mentor: $message',
+          'created_at': DateTime.now().toUtc().toIso8601String(),
+        });
+      }
+
+      print('✅ updateExistingRoomSession: Successfully updated existing room session');
+
+      return {
+        'roomId': existingRoomId,
+        'roomName': roomName,
+        'sessionId': sessionId,
+        'menteeId': menteeId,
+        'mentorId': mentorId,
+      };
+    } catch (e, stack) {
+      print('❌ Error updating existing room session: $e');
+      print('Stack trace: $stack');
+      rethrow;
+    }
+  }
+
   Future<Map<String, dynamic>?> getMentorProfile(String mentorId) async {
     try {
       print('🟡 getMentorProfile: Fetching profile for mentor: $mentorId');
       
       final response = await _supabase
-          .from('profiles_new') // FIXED: Use profiles_new
+          .from('profiles_new') 
           .select('id, username, avatar_url, role, online_status')
           .eq('id', mentorId)
           .eq('role', 'mentor')
@@ -156,7 +265,6 @@ class LiveLobbyService {
     }
   }
 
-  /// 🔹 FIXED: Fetch all pending invites for a mentor
   Future<List<Map<String, dynamic>>> fetchInvitesForMentor(String mentorId) async {
     try {
       print('🟡 fetchInvitesForMentor: Fetching invites for mentor: $mentorId');
@@ -177,14 +285,12 @@ class LiveLobbyService {
     }
   }
 
-  /// 🔹 FIXED: Accept or decline session invitation with better error handling
   Future<Map<String, dynamic>?> updateSessionStatus(String inviteId, bool accept) async {
     try {
       print('🟡 updateSessionStatus: Updating invite $inviteId to ${accept ? 'accepted' : 'declined'}');
       
       final newStatus = accept ? 'accepted' : 'declined';
 
-      // 1️⃣ Update invitation
       final updated = await _supabase
           .from('live_invitations')
           .update({
@@ -205,7 +311,6 @@ class LiveLobbyService {
       final menteeId = updated['mentee_id'].toString();
 
       if (accept) {
-        // 2️⃣ Update live_sessions status to live
         print('🟡 updateSessionStatus: Updating live session to active...');
         await _supabase
             .from('live_sessions')
@@ -216,7 +321,6 @@ class LiveLobbyService {
             })
             .eq('id', sessionId);
 
-        // 3️⃣ Get room details for navigation
         final sessionDetails = await _supabase
             .from('live_sessions')
             .select('room_id, room:rooms(name, creator_id)')
@@ -233,7 +337,6 @@ class LiveLobbyService {
           'mentorId': mentorId,
         };
       } else {
-        // If declined, just update the invitation status
         print('✅ updateSessionStatus: Invitation declined');
         return {
           'sessionId': sessionId,
@@ -247,7 +350,6 @@ class LiveLobbyService {
     }
   }
 
-  /// 🔹 FIXED: Fetch saved code from a session
   Future<String> fetchSessionCode(String sessionId) async {
     try {
       print('🟡 fetchSessionCode: Fetching code for session: $sessionId');
@@ -275,7 +377,6 @@ class LiveLobbyService {
     }
   }
 
-  /// 🔹 NEW: Update session code
   Future<bool> updateSessionCode(String sessionId, String code, String language) async {
     try {
       print('🟡 updateSessionCode: Updating code for session: $sessionId');
@@ -298,7 +399,6 @@ class LiveLobbyService {
     }
   }
 
-  /// 🔹 NEW: Check if user is mentor
   Future<bool> isUserMentor(String userId) async {
     try {
       final response = await _supabase
@@ -314,7 +414,6 @@ class LiveLobbyService {
     }
   }
 
-  /// 🔹 NEW: Get live session details
   Future<Map<String, dynamic>?> getLiveSession(String sessionId) async {
     try {
       final response = await _supabase

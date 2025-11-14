@@ -79,63 +79,54 @@ class _RoomListScreenState extends State<RoomListScreen> {
     setState(() => _isCreatingRoom = true);
 
     try {
-      // Create the room
-      final newRoom = await supabase
+      // Generate unique room ID
+      final roomId = _generateRoomId();
+      
+      // Create room
+      await supabase
           .from('rooms')
           .insert({
+            'id': roomId,
             'name': roomName,
-            'creator_id': user.id, // ✅ FIXED: Changed from 'created_by' to 'creator_id'
+            'creator_id': user.id,
+            'created_at': DateTime.now().toIso8601String(),
           })
           .select()
           .single();
 
-      // Auto-join the room as creator
+      // Add creator as room member
       await supabase.from('room_members').insert({
-        'room_id': newRoom['id'],
+        'room_id': roomId,
         'user_id': user.id,
       });
 
-      // ✅ CREATE LIVE SESSION AND GET sessionId
+      // Create live session for the room
       final session = await supabase
           .from('live_sessions')
           .insert({
-            'room_id': newRoom['id'],
-            'mentee_id': user.id, // Creator becomes mentee
-            'mentor_id': null, // No mentor initially
-            'code': '// Welcome to collaboration room!\n// Start coding...',
+            'room_id': roomId,
+            'mentee_id': user.id, // Creator is the mentee
+            'code': '// Welcome to your new collaboration room!\n// Start coding with your team...',
             'is_live': false,
             'language': 'python',
+            'created_at': DateTime.now().toIso8601String(),
           })
           .select()
           .single();
 
-      final sessionId = session['id'].toString();
-      final mentorId = session['mentor_id']?.toString() ?? '';
-      final menteeId = session['mentee_id']?.toString() ?? '';
-
       _roomController.clear();
-      await _loadRooms();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Room "$roomName" created successfully!'),
-            behavior: SnackBarBehavior.floating,
-            margin: EdgeInsets.all(isSmallScreen ? 8 : 16),
-          ),
-        );
-
-        // ✅ NAVIGATE WITH sessionId
         Navigator.push(
           context,
           MaterialPageRoute(
             builder: (_) => CollabRoomTabs(
-              roomId: newRoom['id'].toString(),
-              roomName: newRoom['name'].toString(),
-              menteeId: menteeId,
-              mentorId: mentorId,
-              isMentor: user.id == mentorId,
-              sessionId: sessionId, // ✅ ADDED
+              roomId: roomId,
+              roomName: roomName,
+              menteeId: user.id,
+              mentorId: '', // No mentor yet
+              isMentor: false,
+              sessionId: session['id'].toString(),
             ),
           ),
         );
@@ -147,6 +138,13 @@ class _RoomListScreenState extends State<RoomListScreen> {
         setState(() => _isCreatingRoom = false);
       }
     }
+  }
+
+  String _generateRoomId() {
+    // Generate a unique room ID (you can use UUID package if preferred)
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final random = DateTime.now().microsecondsSinceEpoch % 10000;
+    return 'room_${timestamp}_$random';
   }
 
   Future<void> _joinRoomById() async {

@@ -46,19 +46,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
         .stream(primaryKey: ['id'])
         .listen((messages) {
       if (mounted) {
-        // Filter messages for this specific chat
         final chatMessages = messages.where((msg) =>
           (msg['sender_id'] == currentUserId && msg['receiver_id'] == widget.receiverId) ||
           (msg['sender_id'] == widget.receiverId && msg['receiver_id'] == currentUserId)
         ).toList();
 
-        // Only update if there are new messages
         if (chatMessages.isNotEmpty) {
           setState(() {
             _messages = chatMessages;
           });
           
-          // Show snackbar for new incoming messages
           final latestMessage = chatMessages.last;
           if (latestMessage['sender_id'] == widget.receiverId && mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -113,9 +110,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen> {
 
       _controller.clear();
       
-      // No need to call _loadMessages() because real-time updates will handle it
-      
-      // Show confirmation
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(

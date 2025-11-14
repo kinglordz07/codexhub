@@ -32,7 +32,7 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
   late CodeController _codeController;
   bool _isDarkMode = false;
   bool _isLoading = true;
-  bool _showFileSelection = true; // NEW: Controls whether to show file selection screen
+  bool _showFileSelection = true; 
   String _selectedLanguage = 'python';
   String _output = '';
   late TabController _tabController;
@@ -42,14 +42,12 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
   String? _currentRoomDescription;
   bool _isExecuting = false;
 
-  // Use consistent language keys
   final Map<String, Mode> _languages = {
     'python': python,
     'java': java,
     'csharp': cs,
   };
 
-  // Map our language keys to Piston API language names and versions
   final Map<String, Map<String, String>> _pistonLanguages = {
     'python': {'language': 'python', 'version': '3.10.0'},
     'java': {'language': 'java', 'version': '15.0.2'},
@@ -83,45 +81,54 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
   }
 
  void _startNewFile() async {
-  // First, prompt for file name
   final TextEditingController titleController = TextEditingController(text: 'Untitled');
-  final TextEditingController descriptionController = TextEditingController();
 
   final result = await showDialog<bool>(
     context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Create New File'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: titleController,
-            decoration: const InputDecoration(
-              labelText: 'File Name',
-              hintText: 'Enter file name',
+    builder: (context) => Dialog(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 400,
+          maxHeight: MediaQuery.of(context).size.height * 0.5,
+        ),
+        child: SingleChildScrollView(
+          child: AlertDialog(
+            title: const Text('Create New File'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: titleController,
+                  decoration: const InputDecoration(
+                    labelText: 'File Name',
+                    hintText: 'Enter file name',
+                    border: OutlineInputBorder(),
+                  ),
+                  autofocus: true,
+                ),
+              ],
             ),
-            autofocus: true,
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  if (titleController.text.trim().isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Please enter a file name')),
+                    );
+                    return;
+                  }
+                  Navigator.pop(context, true);
+                },
+                child: const Text('Create'),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context, false),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            if (titleController.text.trim().isEmpty) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Please enter a file name')),
-              );
-              return;
-            }
-            Navigator.pop(context, true);
-          },
-          child: const Text('Create'),
-        ),
-      ],
     ),
   );
 
@@ -129,13 +136,10 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
     setState(() {
       _showFileSelection = false;
       _currentRoomTitle = titleController.text.trim();
-      _currentRoomDescription = descriptionController.text.trim().isEmpty 
-          ? null 
-          : descriptionController.text.trim();
+      _currentRoomDescription = null;
       _codeController.text = '';
     });
     
-    // Create the room in background with the provided name
     await _createInitialRoom();
   }
 }
@@ -178,7 +182,6 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
     }
   }
 
-  // NEW: Go back to file selection
   void _showFileSelectionScreen() {
     if (mounted) {
       setState(() {
@@ -190,63 +193,96 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
   Future<void> _createInitialRoom() async {
   try {
     final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) {
+      debugPrint('❌ No user for creating initial room');
+      return;
+    }
+
+    debugPrint('🏗️ Creating initial room: ${widget.roomId}');
+
     await Supabase.instance.client.from('code_rooms').insert({
       'room_id': widget.roomId,
       'code': _codeController.text,
       'language': _selectedLanguage,
-      'title': _currentRoomTitle, 
+      'title': _currentRoomTitle,
       'description': _currentRoomDescription,
       'is_public': false,
-      'user_id': user?.id,
+      'user_id': user.id,
+      'created_at': DateTime.now().toIso8601String(),
+      'updated_at': DateTime.now().toIso8601String(),
     });
-  } catch (e) {
-    debugPrint('Error creating initial room: $e');
+
+    debugPrint('✅ Initial room created successfully');
+  } catch (e, stackTrace) {
+    debugPrint('❌ Error creating initial room: $e');
+    debugPrint('Stack trace: $stackTrace');
+    
+    // If room already exists, that's fine - we'll update it later
+    if (e.toString().contains('unique constraint')) {
+      debugPrint('ℹ️ Room already exists, will update on save');
+    }
   }
 }
 
   Future<void> _loadAllRooms() async {
-    if (!mounted) return;
+  if (!mounted) return;
 
-    setState(() {
-      _isLoadingRooms = true;
-    });
+  setState(() {
+    _isLoadingRooms = true;
+  });
 
-    try {
-      final user = Supabase.instance.client.auth.currentUser;
-      if (user == null) {
-        if (mounted) {
-          setState(() {
-            _isLoadingRooms = false;
-            _savedRooms = [];
-          });
-        }
-        return;
-      }
-
-      final response = await Supabase.instance.client
-          .from('code_rooms')
-          .select('*')
-          .eq('user_id', user.id)
-          .order('updated_at', ascending: false);
-
-      if (mounted) {
-        setState(() {
-          _savedRooms = List<Map<String, dynamic>>.from(response);
-          _isLoadingRooms = false;
-        });
-      }
-    } catch (e) {
-      debugPrint('Error loading all rooms: $e');
+  try {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) {
+      debugPrint('❌ No user logged in');
       if (mounted) {
         setState(() {
           _isLoadingRooms = false;
+          _savedRooms = [];
         });
+      }
+      return;
+    }
+
+    debugPrint('🔄 Loading rooms for user: ${user.id}');
+    
+    final response = await Supabase.instance.client
+        .from('code_rooms')
+        .select('*')
+        .eq('user_id', user.id)  // This filter requires RLS policy
+        .order('updated_at', ascending: false);
+
+    debugPrint('✅ Loaded ${response.length} rooms');
+
+    if (mounted) {
+      setState(() {
+        _savedRooms = List<Map<String, dynamic>>.from(response);
+        _isLoadingRooms = false;
+      });
+    }
+  } catch (e, stackTrace) {
+    debugPrint('❌ Error loading rooms: $e');
+    debugPrint('Stack trace: $stackTrace');
+    
+    // Check for RLS policy errors
+    if (e.toString().toLowerCase().contains('policy') || 
+        e.toString().toLowerCase().contains('permission')) {
+      debugPrint('🔒 RLS Policy Error - Check your database policies');
+      if (mounted) {
+        _showSnackBar('Database permission error. Contact administrator.');
       }
     }
+    
+    if (mounted) {
+      setState(() {
+        _isLoadingRooms = false;
+        _savedRooms = [];
+      });
+    }
   }
+}
 
   Future<void> _saveCurrentRoom() async {
-  // Check if code is empty or just whitespace
   if (_codeController.text.trim().isEmpty) {
     if (mounted) {
       _showSnackBar('No code to save');
@@ -263,30 +299,51 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
       return;
     }
 
-    await Supabase.instance.client.from('code_rooms').upsert({
-      'room_id': widget.roomId,
-      'code': _codeController.text,
-      'language': _selectedLanguage,
-      'title': _currentRoomTitle,
-      'description': _currentRoomDescription,
-      'updated_at': DateTime.now().toIso8601String(),
-      'user_id': user.id,
-    });
+    debugPrint('🔄 Saving code for user: ${user.id}');
+    debugPrint('📝 Room ID: ${widget.roomId}');
+
+    // Use upsert with onConflict to handle unique constraints
+    final response = await Supabase.instance.client
+        .from('code_rooms')
+        .upsert({
+          'room_id': widget.roomId,
+          'code': _codeController.text,
+          'language': _selectedLanguage,
+          'title': _currentRoomTitle,
+          'description': _currentRoomDescription,
+          'user_id': user.id,
+          'updated_at': DateTime.now().toIso8601String(),
+        }, onConflict: 'room_id,user_id') // Add this if you use composite unique key
+        .select();
+
+    debugPrint('✅ Save response: $response');
 
     if (mounted) {
       _showSnackBar('Code saved successfully!');
     }
 
     await _loadAllRooms();
-  } catch (e) {
-    debugPrint('Error saving code: $e');
-    if (mounted) {
-      _showSnackBar('Failed to save code');
+  } catch (e, stackTrace) {
+    debugPrint('❌ Error saving code: $e');
+    debugPrint('Stack trace: $stackTrace');
+    
+    // More specific error handling
+    if (e.toString().contains('unique constraint')) {
+      if (mounted) {
+        _showSnackBar('Room ID conflict. Try saving with a different name.');
+      }
+    } else if (e.toString().contains('row-level security')) {
+      if (mounted) {
+        _showSnackBar('Permission denied. Please check RLS policies.');
+      }
+    } else {
+      if (mounted) {
+        _showSnackBar('Failed to save code: ${e.toString()}');
+      }
     }
   }
 }
 
-  // Helper method to show snackbars without storing context
   void _showSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -298,74 +355,85 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
   }
 
   Future<void> _saveAsNewRoom() async {
-
-    if (_codeController.text.trim().isEmpty) {
+  if (_codeController.text.trim().isEmpty) {
     if (mounted) {
       _showSnackBar('No code to save');
     }
     return;
   }
   
-    final TextEditingController titleController = TextEditingController(
-      text: _currentRoomTitle,
-    );
-    final TextEditingController descriptionController = TextEditingController(
-      text: _currentRoomDescription ?? '',
-    );
+  final TextEditingController titleController = TextEditingController(
+    text: _currentRoomTitle,
+  );
+  final TextEditingController descriptionController = TextEditingController(
+    text: _currentRoomDescription ?? '',
+  );
 
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Save As New File'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleController,
-              decoration: const InputDecoration(
-                labelText: 'File Name',
-                hintText: 'Enter file name',
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: descriptionController,
-              decoration: const InputDecoration(
-                labelText: 'Description (Optional)',
-                hintText: 'Enter file description',
-              ),
-              maxLines: 3,
-            ),
-          ],
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (context) => Dialog(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 400,
+          maxHeight: MediaQuery.of(context).size.height * 0.6,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+        child: SingleChildScrollView(
+          child: AlertDialog(
+            title: const Text('Save As New File'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: titleController,
+                  decoration: const InputDecoration(
+                    labelText: 'File Name',
+                    hintText: 'Enter file name',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: descriptionController,
+                  decoration: const InputDecoration(
+                    labelText: 'Description (Optional)',
+                    hintText: 'Enter file description',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLines: 3,
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  if (titleController.text.trim().isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Please enter a file name')),
+                    );
+                    return;
+                  }
+                  Navigator.pop(context, true);
+                },
+                child: const Text('Save'),
+              ),
+            ],
           ),
-          ElevatedButton(
-            onPressed: () {
-              if (titleController.text.trim().isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Please enter a file name')),
-                );
-                return;
-              }
-              Navigator.pop(context, true);
-            },
-            child: const Text('Save'),
-          ),
-        ],
+        ),
       ),
-    );
+    ),
+  );
 
-    if (result == true && mounted) {
-      await _performSaveAsNewRoom(
-        titleController.text.trim(),
-        descriptionController.text.trim(),
-      );
-    }
+  if (result == true && mounted) {
+    await _performSaveAsNewRoom(
+      titleController.text.trim(),
+      descriptionController.text.trim(),
+    );
   }
+}
 
   Future<void> _performSaveAsNewRoom(String title, String description) async {
     try {
@@ -404,47 +472,57 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
 
     final result = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Update File Info'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleController,
-              decoration: const InputDecoration(
-                labelText: 'File Name',
-                hintText: 'Enter file name',
+      builder: (context) => Dialog(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 400,
+            maxHeight: MediaQuery.of(context).size.height * 0.6,
+          ),
+          child: SingleChildScrollView(
+            child: AlertDialog(
+              title: const Text('Update File Info'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: titleController,
+                    decoration: const InputDecoration(
+                      labelText: 'File Name',
+                      hintText: 'Enter file name',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: descriptionController,
+                    decoration: const InputDecoration(
+                      labelText: 'Description (Optional)',
+                      hintText: 'Enter file description',
+                    ),
+                    maxLines: 3,
+                  ),
+                ],
               ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    if (titleController.text.trim().isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Please enter a file name')),
+                      );
+                      return;
+                    }
+                    Navigator.pop(context, true);
+                  },
+                  child: const Text('Update'),
+                ),
+              ],
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: descriptionController,
-              decoration: const InputDecoration(
-                labelText: 'Description (Optional)',
-                hintText: 'Enter file description',
-              ),
-              maxLines: 3,
-            ),
-          ],
+          ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (titleController.text.trim().isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Please enter a file name')),
-                );
-                return;
-              }
-              Navigator.pop(context, true);
-            },
-            child: const Text('Update'),
-          ),
-        ],
       ),
     );
 
@@ -491,7 +569,6 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
 
 
   Future<void> _deleteRoom(Map<String, dynamic> room) async {
-    // Prevent deleting the current room
     if (room['room_id'] == widget.roomId) {
       if (mounted) {
         _showSnackBar('Cannot delete the current file');
@@ -540,7 +617,6 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
     }
   }
 
-  // ENHANCED: Better offline execution with smart analysis
   Future<void> _runCode() async {
     if (_isExecuting) return;
     
@@ -553,7 +629,6 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
       });
     }
 
-    // First try online execution
     try {
       final pistonLang = _pistonLanguages[_selectedLanguage];
       if (pistonLang == null) {
@@ -594,28 +669,24 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen>
             _isExecuting = false;
           });
         }
-        return; // Online execution succeeded
+        return; 
       } else {
         throw Exception('HTTP ${response.statusCode}');
       }
     } catch (e) {
-      // Online execution failed, use enhanced offline analysis
       debugPrint('Online execution failed: $e');
       await _executeEnhancedOffline();
     }
   }
 
-  // NEW: Enhanced offline execution with better analysis
   Future<void> _executeEnhancedOffline() async {
     final code = _codeController.text;
     final random = Random();
 
-    // Simulate processing time
     await Future.delayed(Duration(milliseconds: 500 + random.nextInt(1000)));
 
     String analyzedOutput;
 
-    // Enhanced code analysis for better offline feedback
     if (code.trim().isEmpty) {
       analyzedOutput = '❌ No code to execute\nPlease write some code first.';
     } else {
@@ -637,7 +708,6 @@ $analyzedOutput
     }
   }
 
-  // NEW: Advanced code structure analysis
   String _analyzeCodeStructure(String code) {
     final output = StringBuffer();
     final lines = code.split('\n');
@@ -649,7 +719,6 @@ $analyzedOutput
     output.writeln('📝 Non-empty lines: $nonEmptyLines');
     output.writeln('');
 
-    // Language-specific analysis
     switch (_selectedLanguage) {
       case 'python':
         _analyzePythonCode(code, output);
@@ -715,7 +784,6 @@ $analyzedOutput
       output.writeln('💡 No print statements found');
     }
 
-    // Check for common patterns
     if (code.contains('for ') && code.contains(' in ')) {
       output.writeln('\n🔄 For loop detected');
     }
@@ -770,7 +838,6 @@ $analyzedOutput
       output.writeln('💡 No print statements found');
     }
 
-    // Check for common patterns
     if (code.contains('for (')) {
       output.writeln('\n🔄 For loop detected');
     }
@@ -825,7 +892,6 @@ $analyzedOutput
       output.writeln('💡 No console output statements found');
     }
 
-    // Check for common patterns
     if (code.contains('for (')) {
       output.writeln('\n🔄 For loop detected');
     }
@@ -840,33 +906,34 @@ $analyzedOutput
   String _evaluatePythonExpression(String expr) {
     expr = expr.trim();
     
-    // Remove surrounding quotes
     if ((expr.startsWith("'") && expr.endsWith("'")) ||
         (expr.startsWith('"') && expr.endsWith('"'))) {
       return expr.substring(1, expr.length - 1);
     }
 
-    // Simple arithmetic
     if (RegExp(r'^\d+\s*[\+\-\*\/]\s*\d+$').hasMatch(expr)) {
       try {
         if (expr.contains('+')) {
           final parts = expr.split('+');
-          final a = int.tryParse(parts[0].trim()) ?? double.tryParse(parts[0].trim());
-          final b = int.tryParse(parts[1].trim()) ?? double.tryParse(parts[1].trim());
-          if (a != null && b != null) return (a + b).toString();
+          if (parts.length >= 2) {
+            final a = int.tryParse(parts[0].trim()) ?? double.tryParse(parts[0].trim());
+            final b = int.tryParse(parts[1].trim()) ?? double.tryParse(parts[1].trim());
+            if (a != null && b != null) return (a + b).toString();
+          }
         }
         if (expr.contains('-')) {
           final parts = expr.split('-');
-          final a = int.tryParse(parts[0].trim()) ?? double.tryParse(parts[0].trim());
-          final b = int.tryParse(parts[1].trim()) ?? double.tryParse(parts[1].trim());
-          if (a != null && b != null) return (a - b).toString();
+          if (parts.length >= 2) {
+            final a = int.tryParse(parts[0].trim()) ?? double.tryParse(parts[0].trim());
+            final b = int.tryParse(parts[1].trim()) ?? double.tryParse(parts[1].trim());
+            if (a != null && b != null) return (a - b).toString();
+          }
         }
       } catch (e) {
         return expr;
       }
     }
 
-    // String concatenation
     if (expr.contains('+') && (expr.contains("'") || expr.contains('"'))) {
       try {
         final parts = expr.split('+');
@@ -890,12 +957,10 @@ $analyzedOutput
   String _evaluateJavaExpression(String expr) {
     expr = expr.replaceAll(';', '').trim();
     
-    // Handle strings
     if (expr.startsWith('"') && expr.endsWith('"')) {
       return expr.substring(1, expr.length - 1);
     }
 
-    // Simple arithmetic
     if (RegExp(r'^\d+\s*[\+\-\*\/]\s*\d+$').hasMatch(expr)) {
       try {
         if (expr.contains('+')) {
@@ -915,19 +980,19 @@ $analyzedOutput
   String _evaluateCSharpExpression(String expr) {
     expr = expr.replaceAll(';', '').trim();
     
-    // Handle strings
     if (expr.startsWith('"') && expr.endsWith('"')) {
       return expr.substring(1, expr.length - 1);
     }
 
-    // Simple arithmetic
     if (RegExp(r'^\d+\s*[\+\-\*\/]\s*\d+$').hasMatch(expr)) {
       try {
         if (expr.contains('+')) {
           final parts = expr.split('+');
-          final a = int.tryParse(parts[0].trim());
-          final b = int.tryParse(parts[1].trim());
-          if (a != null && b != null) return (a + b).toString();
+          if (parts.length >= 2) {
+            final a = int.tryParse(parts[0].trim());
+            final b = int.tryParse(parts[1].trim());
+            if (a != null && b != null) return (a + b).toString();
+          }
         }
       } catch (e) {
         return expr;
@@ -1027,7 +1092,6 @@ $analyzedOutput
       );
     }
 
-    // NEW: Show file selection screen first
     if (_showFileSelection) {
       return _buildFileSelectionScreen();
     }
@@ -1037,7 +1101,6 @@ $analyzedOutput
     final isVerySmallScreen = screenSize.width < 400;
     final isTablet = screenSize.width >= 600 && screenSize.width < 1200;
 
-    // Adjust font sizes and padding based on screen size
     final double titleFontSize = isVerySmallScreen ? 14 : (isSmallScreen ? 16 : (isTablet ? 18 : 20));
     final double bodyFontSize = isVerySmallScreen ? 12 : (isSmallScreen ? 14 : 16);
     final double iconSize = isVerySmallScreen ? 18 : (isSmallScreen ? 20 : 24);
@@ -1099,7 +1162,6 @@ $analyzedOutput
           ],
         ),
         actions: [
-          // NEW: Back to file selection button
           IconButton(
             icon: Icon(Icons.folder_open, size: iconSize),
             onPressed: _showFileSelectionScreen,
@@ -1107,7 +1169,6 @@ $analyzedOutput
             padding: EdgeInsets.all(isVerySmallScreen ? 4 : 8),
           ),
           
-          // Language dropdown - now more prominent and accessible
           Container(
             padding: EdgeInsets.symmetric(horizontal: 8),
             child: DropdownButtonHideUnderline(
@@ -1131,7 +1192,6 @@ $analyzedOutput
             ),
           ),
           
-          // Run button with loading indicator
           _isExecuting
               ? Padding(
                   padding: EdgeInsets.all(isVerySmallScreen ? 4 : 8),
@@ -1151,7 +1211,6 @@ $analyzedOutput
                   padding: EdgeInsets.all(isVerySmallScreen ? 4 : 8),
                 ),
           
-          // Overflow menu for additional options including theme
           PopupMenuButton<String>(
             icon: Icon(Icons.more_vert, size: iconSize),
             onSelected: (value) {
@@ -1210,7 +1269,7 @@ $analyzedOutput
         child: TabBarView(
           controller: _tabController,
           children: [
-            // Editor Tab - with clear and copy buttons at top right
+            // Editor Tab 
             _buildEditorTab(isSmallScreen, bodyFontSize, iconSize),
 
             // Output Tab
@@ -1224,7 +1283,6 @@ $analyzedOutput
     );
   }
 
-  // NEW: File selection screen
   Widget _buildFileSelectionScreen() {
     final screenSize = MediaQuery.of(context).size;
     final isSmallScreen = screenSize.width < 600;
@@ -1236,128 +1294,126 @@ $analyzedOutput
         backgroundColor: Colors.indigo,
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 40),
-              Center(
-                child: Icon(
-                  Icons.code,
-                  size: 80,
-                  color: Colors.indigo,
-                ),
-              ),
-              const SizedBox(height: 40),
-              Text(
-                'Welcome to Code Editor',
-                style: TextStyle(
-                  fontSize: isSmallScreen ? 24 : 32,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.indigo,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Choose how you want to start coding:',
-                style: TextStyle(
-                  fontSize: isSmallScreen ? 16 : 18,
-                  color: Colors.grey[600],
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 60),
-              
-              // New File Option
-              Card(
-                elevation: 4,
-                child: ListTile(
-                  leading: Icon(
-                    Icons.create_new_folder,
-                    size: 40,
-                    color: Colors.green,
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const SizedBox(height: 20),
+                Center(
+                  child: Icon(
+                    Icons.code,
+                    size: isSmallScreen ? 60 : 80,
+                    color: Colors.indigo,
                   ),
-                  title: Text(
-                    'Create New File',
-                    style: TextStyle(
-                      fontSize: isSmallScreen ? 18 : 20,
-                      fontWeight: FontWeight.bold,
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'Welcome to Code Editor',
+                  style: TextStyle(
+                    fontSize: isSmallScreen ? 20 : 28,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.indigo,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Choose how you want to start coding:',
+                  style: TextStyle(
+                    fontSize: isSmallScreen ? 14 : 16,
+                    color: Colors.grey[600],
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 32),
+                // New File Option
+                Card(
+                  elevation: 4,
+                  child: ListTile(
+                    leading: Icon(
+                      Icons.create_new_folder,
+                      size: isSmallScreen ? 32 : 40,
+                      color: Colors.green,
                     ),
-                  ),
-                  subtitle: Text(
-                    'Start with a blank file and write new code',
-                    style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
-                  ),
-                  trailing: Icon(Icons.arrow_forward_ios),
-                  onTap: _startNewFile,
-                ),
-              ),
-              
-              const SizedBox(height: 20),
-              
-              // Open Existing File Option
-              Card(
-                elevation: 4,
-                child: ListTile(
-                  leading: Icon(
-                    Icons.folder_open,
-                    size: 40,
-                    color: Colors.blue,
-                  ),
-                  title: Text(
-                    'Open Existing File',
-                    style: TextStyle(
-                      fontSize: isSmallScreen ? 18 : 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  subtitle: Text(
-                    'Open and continue working on a saved file',
-                    style: TextStyle(fontSize: isSmallScreen ? 14 : 16),
-                  ),
-                  trailing: Icon(Icons.arrow_forward_ios),
-                  onTap: () {
-                    // Navigate to files tab to select a file
-                    setState(() {
-                      _showFileSelection = false;
-                      _tabController.animateTo(2); // Switch to files tab
-                    });
-                  },
-                ),
-              ),
-              
-              const Spacer(),
-              
-              // Additional info
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.grey[50],
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Column(
-                  children: [
-                    Icon(
-                      Icons.info,
-                      color: Colors.blue,
-                      size: 24,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'You can always switch between files using the folder icon in the app bar',
+                    title: Text(
+                      'Create New File',
                       style: TextStyle(
-                        fontSize: isSmallScreen ? 12 : 14,
-                        color: Colors.grey[600],
+                        fontSize: isSmallScreen ? 16 : 18,
+                        fontWeight: FontWeight.bold,
                       ),
-                      textAlign: TextAlign.center,
                     ),
-                  ],
+                    subtitle: Text(
+                      'Start with a blank file and write new code',
+                      style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
+                    ),
+                    trailing: Icon(Icons.arrow_forward_ios, size: isSmallScreen ? 16 : 20),
+                    onTap: _startNewFile,
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 16),
+                // Open Existing File Option
+                Card(
+                  elevation: 4,
+                  child: ListTile(
+                    leading: Icon(
+                      Icons.folder_open,
+                      size: isSmallScreen ? 32 : 40,
+                      color: Colors.blue,
+                    ),
+                    title: Text(
+                      'Open Existing File',
+                      style: TextStyle(
+                        fontSize: isSmallScreen ? 16 : 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    subtitle: Text(
+                      'Open and continue working on a saved file',
+                      style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
+                    ),
+                    trailing: Icon(Icons.arrow_forward_ios, size: isSmallScreen ? 16 : 20),
+                    onTap: () {
+                      setState(() {
+                        _showFileSelection = false;
+                        _tabController.animateTo(2);
+                      });
+                    },
+                  ),
+                ),
+                const SizedBox(height: 24),
+                // Info Container
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[50],
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.info,
+                        color: Colors.blue,
+                        size: isSmallScreen ? 20 : 24,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'You can always switch between files using the folder icon in the app bar',
+                        style: TextStyle(
+                          fontSize: isSmallScreen ? 11 : 13,
+                          color: Colors.grey[600],
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+              ],
+            ),
           ),
         ),
       ),
@@ -1369,30 +1425,38 @@ $analyzedOutput
       color: _isDarkMode ? Colors.black : Colors.grey[200],
       child: Column(
         children: [
-          // Clear and Copy buttons at top right of editor tab
+          // Clear and Copy buttons 
           Container(
             padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
             color: _isDarkMode ? Colors.grey[800] : Colors.grey[300],
             child: Row(
               children: [
-                Text(
-                  'Code Editor - ${_getDisplayName(_selectedLanguage)}',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: bodyFontSize,
-                    color: _isDarkMode ? Colors.white : Colors.black,
+                Expanded(
+                  child: Text(
+                    'Code Editor - ${_getDisplayName(_selectedLanguage)}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: bodyFontSize,
+                      color: _isDarkMode ? Colors.white : Colors.black,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
                   ),
                 ),
-                const Spacer(),
+                const SizedBox(width: 8),
                 IconButton(
                   icon: Icon(Icons.copy, size: iconSize),
                   onPressed: _copyCode,
                   tooltip: 'Copy Code',
+                  padding: EdgeInsets.all(4),
+                  constraints: BoxConstraints(minWidth: 40, minHeight: 40),
                 ),
                 IconButton(
                   icon: Icon(Icons.clear_all, size: iconSize),
                   onPressed: _clearCode,
                   tooltip: 'Clear Code',
+                  padding: EdgeInsets.all(4),
+                  constraints: BoxConstraints(minWidth: 40, minHeight: 40),
                 ),
               ],
             ),
@@ -1431,24 +1495,32 @@ $analyzedOutput
             color: _isDarkMode ? Colors.grey[800] : Colors.grey[200],
             child: Row(
               children: [
-                Text(
-                  'Output',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: bodyFontSize,
-                    color: _isDarkMode ? Colors.white : Colors.black,
+                Expanded(
+                  child: Text(
+                    'Output',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: bodyFontSize,
+                      color: _isDarkMode ? Colors.white : Colors.black,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
                   ),
                 ),
-                const Spacer(),
+                const SizedBox(width: 8),
                 IconButton(
                   icon: Icon(Icons.content_copy, size: iconSize),
                   onPressed: _copyOutput,
                   tooltip: 'Copy Output',
+                  padding: EdgeInsets.all(4),
+                  constraints: BoxConstraints(minWidth: 40, minHeight: 40),
                 ),
                 IconButton(
                   icon: Icon(Icons.clear_all, size: iconSize),
                   onPressed: _clearOutput,
                   tooltip: 'Clear Output',
+                  padding: EdgeInsets.all(4),
+                  constraints: BoxConstraints(minWidth: 40, minHeight: 40),
                 ),
               ],
             ),
@@ -1486,19 +1558,25 @@ $analyzedOutput
             color: _isDarkMode ? Colors.grey[800] : Colors.grey[200],
             child: Row(
               children: [
-                Text(
-                  'Saved Files',
-                  style: TextStyle(
-                    fontSize: bodyFontSize,
-                    fontWeight: FontWeight.bold,
-                    color: _isDarkMode ? Colors.white : Colors.black,
+                Expanded(
+                  child: Text(
+                    'Saved Files',
+                    style: TextStyle(
+                      fontSize: bodyFontSize,
+                      fontWeight: FontWeight.bold,
+                      color: _isDarkMode ? Colors.white : Colors.black,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
                   ),
                 ),
-                const Spacer(),
+                const SizedBox(width: 8),
                 IconButton(
                   icon: Icon(Icons.refresh, size: iconSize),
                   onPressed: _loadAllRooms,
                   tooltip: 'Refresh Files',
+                  padding: EdgeInsets.all(4),
+                  constraints: BoxConstraints(minWidth: 40, minHeight: 40),
                 ),
                 if (!isVerySmallScreen)
                   Padding(

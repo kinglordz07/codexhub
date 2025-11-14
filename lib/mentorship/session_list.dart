@@ -1,6 +1,10 @@
-
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest.dart' as tz;
 import '../services/sessionservice.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class SessionListScreen extends StatefulWidget {
   const SessionListScreen({super.key});
@@ -12,22 +16,274 @@ class SessionListScreen extends StatefulWidget {
 class _SessionListScreenState extends State<SessionListScreen>
     with SingleTickerProviderStateMixin {
   final SessionService _sessionService = SessionService();
+  final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
+  final SupabaseClient _supabase = Supabase.instance.client;
+  
   bool isLoading = true;
   List<Map<String, dynamic>> sessions = [];
+  int _pendingCount = 0;
+  String? _loadingSessionId;
 
   late TabController _tabController;
+  late RealtimeChannel _mentorNotificationChannel;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
+    _initializeNotifications();
+    _setupMentorNotificationListener();
     _loadSessions();
   }
 
   @override
   void dispose() {
+    _mentorNotificationChannel.unsubscribe();
     _tabController.dispose();
     super.dispose();
+  }
+
+ void _setupMentorNotificationListener() {
+  final currentUserId = _sessionService.currentUserId;
+  if (currentUserId == null) {
+    debugPrint('❌ Mentor notification listener: No current user ID');
+    return;
+  }
+
+  debugPrint('🎯 Setting up mentor notification listener for: $currentUserId');
+
+  _mentorNotificationChannel = _supabase.channel('mentor_new_sessions_$currentUserId');
+  
+  _mentorNotificationChannel.onPostgresChanges(
+    event: PostgresChangeEvent.insert,
+    schema: 'public',
+    table: 'notifications',
+    filter: PostgresChangeFilter(
+      type: PostgresChangeFilterType.eq,
+      column: 'user_id',
+      value: currentUserId,
+    ),
+    callback: (payload) async {
+      debugPrint('📨 Mentor RECEIVED notification: ${payload.newRecord}');
+      
+      final notification = payload.newRecord;
+      final title = notification['title']?.toString() ?? 'New Notification';
+      final message = notification['message']?.toString() ?? 'You have a new notification';
+      
+      debugPrint('📢 Notification details - Title: $title, Message: $message');
+      
+      // Show local notification
+      await _showLocalNotification(title, message);
+      
+      // Show in-app snackbar
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+      
+      // Reload sessions to show new pending requests
+      _loadSessions();
+    },
+  ).subscribe((status, error) {
+    if (status == RealtimeSubscribeStatus.subscribed) {
+      debugPrint('✅ Mentor notification listener SUBSCRIBED successfully');
+    } else if (status == RealtimeSubscribeStatus.closed) {
+      debugPrint('🛑 Mentor notification listener closed');
+    }
+    if (error != null) {
+      debugPrint('❌ Mentor notification listener error: $error');
+    }
+  });
+}
+
+
+
+  Future<void> _showLocalNotification(String title, String body) async {
+   AndroidNotificationDetails androidDetails =
+      AndroidNotificationDetails(
+    'mentor_notifications',
+    'Mentor Notifications',
+    channelDescription: 'Notifications for new session requests and updates',
+    importance: Importance.max, 
+    priority: Priority.max, 
+    enableVibration: true,
+    playSound: true,
+    showWhen: true,
+    autoCancel: true,
+    styleInformation: BigTextStyleInformation(body), 
+  );
+
+  const DarwinNotificationDetails iosDetails =
+      DarwinNotificationDetails(
+    presentAlert: true,
+    presentBadge: true,
+    presentSound: true,
+    sound: 'default',
+  );
+
+   NotificationDetails details = NotificationDetails(
+    android: androidDetails,
+    iOS: iosDetails,
+  );
+
+  await _notifications.show(
+    DateTime.now().millisecondsSinceEpoch.remainder(100000),
+    title,
+    body,
+    details,
+  );
+  
+  debugPrint('📢 HIGH PRIORITY NOTIFICATION SENT: $title');
+}
+
+  Future<void> _initializeNotifications() async {
+  try {
+    debugPrint('🔔 STARTING NOTIFICATION INITIALIZATION...');
+    
+    tz.initializeTimeZones();
+    debugPrint('✅ Time zones initialized');
+    
+const AndroidNotificationChannel mentorChannel = AndroidNotificationChannel(
+  'mentor_notifications',
+  'Mentor Notifications', 
+  description: 'Notifications for new session requests and updates',
+  importance: Importance.max,
+  playSound: true,
+  enableVibration: true,
+  showBadge: true,
+);
+
+const AndroidNotificationChannel studentChannel = AndroidNotificationChannel(
+  'student_session_updates',
+  'Session Status Updates',
+  description: 'Notifications when your session status changes',
+  importance: Importance.max,
+  playSound: true,
+  enableVibration: true,
+  showBadge: true,
+);
+
+const AndroidNotificationChannel sessionStartChannel = AndroidNotificationChannel(
+  'session_start',
+  'Session Start',
+  description: 'Notifications when sessions start',
+  importance: Importance.max,
+  playSound: true,
+  enableVibration: true,
+  showBadge: true,
+);
+
+    // Initialize Android settings with channels
+    const AndroidInitializationSettings androidSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    
+    const DarwinInitializationSettings iosSettings =
+        DarwinInitializationSettings(
+      requestAlertPermission: true,
+      requestBadgePermission: true,
+      requestSoundPermission: true,
+    );
+
+    const InitializationSettings initSettings = InitializationSettings(
+      android: androidSettings,
+      iOS: iosSettings,
+    );
+
+    debugPrint('📱 Initializing notifications plugin...');
+    await _notifications.initialize(initSettings);
+    debugPrint('✅ Notifications plugin initialized');
+    
+    // Create channels (Android 8.0+)
+    final androidPlugin = _notifications.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    
+    if (androidPlugin != null) {
+      debugPrint('📱 Creating notification channels...');
+      await androidPlugin.createNotificationChannel(mentorChannel);
+      await androidPlugin.createNotificationChannel(studentChannel);
+      await androidPlugin.createNotificationChannel(sessionStartChannel);
+      debugPrint('✅ Notification channels created successfully');
+      
+      // Check if notifications are enabled
+      final bool? notificationsEnabled = await androidPlugin.areNotificationsEnabled();
+      debugPrint('📱 System notifications enabled: $notificationsEnabled');
+    } else {
+      debugPrint('❌ Android notifications plugin not available');
+    }
+    
+    // Request notification permission
+    debugPrint('🔐 Requesting notification permission...');
+    final status = await Permission.notification.request();
+    debugPrint('🔐 Notification permission status: $status');
+    
+    debugPrint('🎉 NOTIFICATION INITIALIZATION COMPLETE');
+    
+  } catch (e) {
+    debugPrint('💥 ERROR in notification initialization: $e');
+  }
+}
+
+  Future<void> _scheduleSessionStartNotification(Map<String, dynamic> session) async {
+    try {
+      final sessionDate = DateTime.parse(session['session_date']);
+      final sessionTimeParts = session['session_time'].split(':');
+      
+      if (sessionTimeParts.length < 2) {
+        debugPrint('⚠️ Invalid session time format: ${session['session_time']}');
+        return;
+      }
+      
+      final sessionDateTime = DateTime(
+        sessionDate.year,
+        sessionDate.month,
+        sessionDate.day,
+        int.parse(sessionTimeParts[0]),
+        int.parse(sessionTimeParts[1]),
+      );
+
+      const AndroidNotificationDetails androidDetails =
+          AndroidNotificationDetails(
+        'session_start',
+        'Session Start',
+        channelDescription: 'Notifications when sessions start',
+        importance: Importance.high,
+        priority: Priority.high,
+        enableVibration: true,
+        playSound: true,
+      );
+
+      const NotificationDetails platformDetails = NotificationDetails(
+        android: androidDetails,
+        iOS: DarwinNotificationDetails(
+          sound: 'default',
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
+      );
+
+      final location = tz.local;
+      final scheduledDate = tz.TZDateTime.from(sessionDateTime, location);
+
+      await _notifications.zonedSchedule(
+        session['id'].hashCode + 5000, 
+        'Session Starting Now! 🚀',
+        'Your ${session['session_type']} with ${session['profiles_new']?['username'] ?? 'Mentor'} is starting now',
+        scheduledDate,
+        platformDetails,
+        uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      );
+
+      debugPrint('Session start notification scheduled for ${session['id']} at $scheduledDate'); // FIXED: Added debugPrint
+    } catch (e) {
+      debugPrint('Error scheduling session start notification: $e'); // FIXED: Added debugPrint
+    }
   }
 
   Future<void> _loadSessions() async {
@@ -37,89 +293,120 @@ class _SessionListScreenState extends State<SessionListScreen>
       setState(() {
         sessions = data;
         isLoading = false;
+        _pendingCount = _filterByStatus('pending').length;
       });
     } catch (e) {
       setState(() => isLoading = false);
       if(mounted){
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Failed to load sessions: $e")),
-      );}
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to load sessions: $e")),
+        );
+      }
     }
   }
 
   Future<void> _updateSessionStatus(String sessionId, String status) async {
+    setState(() => _loadingSessionId = sessionId);
     try {
       await _sessionService.updateSessionStatus(sessionId, status);
-      _loadSessions(); // refresh
+      
+      final session = sessions.firstWhere((s) => s['id'] == sessionId);
+      
+      try {
+        final studentProfile = await _supabase 
+            .from('profiles_new')
+            .select('username')
+            .eq('id', session['user_id']) 
+            .single();
+        
+        final studentName = studentProfile['username'] ?? 'Student';
+        debugPrint('🎯 Notification target: Student $studentName');
+        
+      } catch (e) {
+        debugPrint('⚠️ Could not fetch student profile: $e');
+      }
+      
+      if (status == 'accepted') {
+        await _scheduleSessionStartNotification(session);
+      }
+
+      _loadSessions(); 
       if(mounted){
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Session $status")),
-      );}
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Session $status")),
+        );
+      }
     } catch (e) {
       if(mounted){
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Failed to update session: $e")),
-      );}
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to update session: $e")),
+        );
+      }
+    } finally {
+      setState(() => _loadingSessionId = null);
     }
   }
 
   Future<void> _rescheduleSession(Map<String, dynamic> session) async {
-  final DateTime? newDate = await showDatePicker(
-    context: context,
-    initialDate: DateTime.now().add(const Duration(days: 1)),
-    firstDate: DateTime.now(),
-    lastDate: DateTime.now().add(const Duration(days: 365)),
-  );
-
-  if (!mounted || newDate == null) return;
-
-  final TimeOfDay? newTime = await showTimePicker(
-    context: context,
-    initialTime: TimeOfDay.now(),
-  );
-
-  if (newTime == null) return;
-
-  final DateTime newDateTime = DateTime(
-    newDate.year,
-    newDate.month,
-    newDate.day,
-    newTime.hour,
-    newTime.minute,
-  );
-
-  try {
-    await _sessionService.rescheduleSession(
-      session['id'],
-      newDateTime.toIso8601String().split('T')[0], // Date part
-      "${newTime.hour.toString().padLeft(2, '0')}:${newTime.minute.toString().padLeft(2, '0')}", // Time part
+    final DateTime? newDate = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now().add(const Duration(days: 1)),
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
     );
-    
-    // Update the session status to 'rescheduled'
-    await _sessionService.updateSessionStatus(session['id'], 'rescheduled');
-    
-    _loadSessions(); // refresh
-    if(mounted){
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Session rescheduled successfully!")),
-    );}
-  } catch (e) {
-    if(mounted){
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Failed to reschedule session: $e")),
-    );}
+
+    if (!mounted || newDate == null) return;
+
+    final TimeOfDay? newTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+    );
+
+    if (newTime == null) return;
+
+    final DateTime newDateTime = DateTime(
+      newDate.year,
+      newDate.month,
+      newDate.day,
+      newTime.hour,
+      newTime.minute,
+    );
+
+    try {
+      await _sessionService.rescheduleSession(
+        session['id'],
+        newDateTime.toIso8601String().split('T')[0],
+        "${newTime.hour.toString().padLeft(2, '0')}:${newTime.minute.toString().padLeft(2, '0')}",
+        newDateTime.toIso8601String(),
+        tz.local.name,
+      );
+      
+      await _sessionService.updateSessionStatus(session['id'], 'rescheduled');
+      
+      final updatedSession = {...session};
+      updatedSession['session_date'] = newDateTime.toIso8601String().split('T')[0];
+      updatedSession['session_time'] = "${newTime.hour.toString().padLeft(2, '0')}:${newTime.minute.toString().padLeft(2, '0')}";
+      await _scheduleSessionStartNotification(updatedSession);
+
+      _loadSessions();
+      if(mounted){
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Session rescheduled successfully!")),
+        );
+      }
+    } catch (e) {
+      if(mounted){
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to reschedule session: $e")),
+        );
+      }
+    }
   }
-}
 
   List<Map<String, dynamic>> _filterByStatus(String status) {
-  if (status == 'accepted') {
-    // Include both accepted and rescheduled sessions in the accepted tab
-    return sessions.where((s) => s['status'] == 'accepted' || s['status'] == 'rescheduled').toList();
+    return sessions.where((s) => s['status'] == status).toList();
   }
-  return sessions.where((s) => s['status'] == status).toList();
-}
 
-  // Enhanced responsive layout detection
   ScreenType get _screenType {
     final double width = MediaQuery.of(context).size.width;
     if (width < 600) return ScreenType.small;
@@ -127,66 +414,46 @@ class _SessionListScreenState extends State<SessionListScreen>
     return ScreenType.large;
   }
 
-  // Responsive padding values
   EdgeInsets get _screenPadding {
     switch (_screenType) {
-      case ScreenType.small:
-        return const EdgeInsets.all(16);
-      case ScreenType.medium:
-        return const EdgeInsets.all(20);
-      case ScreenType.large:
-        return const EdgeInsets.all(24);
+      case ScreenType.small: return const EdgeInsets.all(16);
+      case ScreenType.medium: return const EdgeInsets.all(20);
+      case ScreenType.large: return const EdgeInsets.all(24);
     }
   }
 
-  // Responsive font sizes
   double get _titleFontSize {
     switch (_screenType) {
-      case ScreenType.small:
-        return 16;
-      case ScreenType.medium:
-        return 18;
-      case ScreenType.large:
-        return 20;
+      case ScreenType.small: return 16;
+      case ScreenType.medium: return 18;
+      case ScreenType.large: return 20;
     }
   }
 
   double get _bodyFontSize {
     switch (_screenType) {
-      case ScreenType.small:
-        return 14;
-      case ScreenType.medium:
-        return 16;
-      case ScreenType.large:
-        return 16;
+      case ScreenType.small: return 14;
+      case ScreenType.medium: return 16;
+      case ScreenType.large: return 16;
     }
   }
 
-  // Responsive icon sizes
   double get _iconSize {
     switch (_screenType) {
-      case ScreenType.small:
-        return 16;
-      case ScreenType.medium:
-        return 18;
-      case ScreenType.large:
-        return 20;
+      case ScreenType.small: return 16;
+      case ScreenType.medium: return 18;
+      case ScreenType.large: return 20;
     }
   }
 
-  // Responsive button padding
   EdgeInsets get _buttonPadding {
     switch (_screenType) {
-      case ScreenType.small:
-        return const EdgeInsets.symmetric(horizontal: 12, vertical: 10);
-      case ScreenType.medium:
-        return const EdgeInsets.symmetric(horizontal: 16, vertical: 12);
-      case ScreenType.large:
-        return const EdgeInsets.symmetric(horizontal: 20, vertical: 14);
+      case ScreenType.small: return const EdgeInsets.symmetric(horizontal: 12, vertical: 10);
+      case ScreenType.medium: return const EdgeInsets.symmetric(horizontal: 16, vertical: 12);
+      case ScreenType.large: return const EdgeInsets.symmetric(horizontal: 20, vertical: 14);
     }
   }
 
-  // Minimum touch target size (44px for accessibility)
   double get _minTouchSize => 44;
 
   Widget _buildSessionList(List<Map<String, dynamic>> list) {
@@ -209,7 +476,6 @@ class _SessionListScreenState extends State<SessionListScreen>
       );
     }
 
-    // Use different layouts based on screen size
     if (_screenType == ScreenType.large) {
       return _buildGridView(list);
     } else {
@@ -258,6 +524,7 @@ class _SessionListScreenState extends State<SessionListScreen>
     final status = session['status'] ?? 'pending';
     final isPending = status == 'pending';
     final isAccepted = status == 'accepted' || status == 'rescheduled';
+    final isLoading = _loadingSessionId == session['id'];
 
     return Card(
       elevation: 4,
@@ -335,7 +602,6 @@ class _SessionListScreenState extends State<SessionListScreen>
               "Notes: ${session['notes'] ?? 'None'}",
             ),
 
-            // Rescheduled info if applicable
             if (session['rescheduled_at'] != null) ...[
               SizedBox(height: _screenType == ScreenType.small ? 8 : 12),
               _buildDetailRow(
@@ -346,7 +612,10 @@ class _SessionListScreenState extends State<SessionListScreen>
             
             // Action Buttons
             SizedBox(height: _screenType == ScreenType.small ? 16 : 20),
-            _buildActionButtons(session, isPending, isAccepted),
+            if (isLoading)
+              const Center(child: CircularProgressIndicator()) // FIXED: Added const
+            else
+              _buildActionButtons(session, isPending, isAccepted),
           ],
         ),
       ),
@@ -382,7 +651,6 @@ class _SessionListScreenState extends State<SessionListScreen>
   }
 
   Widget _buildActionButtons(Map<String, dynamic> session, bool isPending, bool isAccepted) {
-    // For small screens, stack buttons vertically
     if (_screenType == ScreenType.small && (isPending || isAccepted)) {
       return Column(
         children: _buildButtonChildren(session, isPending, isAccepted, true),
@@ -483,6 +751,7 @@ class _SessionListScreenState extends State<SessionListScreen>
     }
   }
 
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -490,7 +759,27 @@ class _SessionListScreenState extends State<SessionListScreen>
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("My Session Requests"),
+        title: Stack(
+          children: [
+            const Text("My Session Requests"),
+            if (_pendingCount > 0)
+              Positioned(
+                right: 0,
+                top: 0,
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.red,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    '$_pendingCount',
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ),
+              ),
+          ],
+        ),
         backgroundColor: primaryColor,
         bottom: TabBar(
           controller: _tabController,
@@ -504,6 +793,7 @@ class _SessionListScreenState extends State<SessionListScreen>
           tabs: const [
             Tab(text: "Pending"),
             Tab(text: "Accepted"),
+            Tab(text: "Rescheduled"),
             Tab(text: "Declined"),
           ],
         ),
@@ -516,6 +806,7 @@ class _SessionListScreenState extends State<SessionListScreen>
                 children: [
                   _buildSessionList(_filterByStatus('pending')),
                   _buildSessionList(_filterByStatus('accepted')),
+                  _buildSessionList(_filterByStatus('rescheduled')),
                   _buildSessionList(_filterByStatus('declined')),
                 ],
               ),

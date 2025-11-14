@@ -3,7 +3,8 @@ import 'package:codexhub01/parts/sign_up.dart';
 import 'package:codexhub01/services/authservice.dart';
 import 'package:codexhub01/main.dart'; 
 import 'package:codexhub01/parts/mentor.dart'; 
-import 'package:codexhub01/utils/forgotpass.dart'; 
+import 'package:codexhub01/utils/forgotpass.dart';
+import 'package:codexhub01/services/call_manager.dart'; 
 
 class SignIn extends StatefulWidget {
   const SignIn({super.key});
@@ -31,7 +32,6 @@ class _SignInState extends State<SignIn> {
     if (mounted) setState(fn);
   }
 
-  // 🔹 Show verification dialog when email isn't verified
   void _showVerificationDialog(String email) {
     showDialog(
       context: context,
@@ -55,7 +55,6 @@ class _SignInState extends State<SignIn> {
     );
   }
 
-  // 🔹 Resend email verification using AuthService
   Future<void> _resendVerificationEmail(String email) async {
     try {
       final result = await _authService.resendVerificationEmail(email);
@@ -97,13 +96,11 @@ class _SignInState extends State<SignIn> {
     try {
       final result = await _authService.signIn(email: email, password: password);
 
-      // Check if email needs verification
       if (result['requiresEmailVerification'] == true) {
         _showVerificationDialog(email);
         return;
       }
 
-      // Check if account needs admin approval
       if (result['pendingApproval'] == true) {
         _showError("Your account is pending admin approval. Please wait for approval to access the platform.");
         return;
@@ -117,6 +114,12 @@ class _SignInState extends State<SignIn> {
       final role = result['role'] ?? 'student';
 
       if (!mounted) return;
+      
+      // Initialize call listener after successful login
+      final callManager = CallManager();
+      callManager.initializeCallListener();
+      debugPrint('✅ Call listener initialized after login');
+      
       if (role == 'mentor') {
         Navigator.pushReplacement(
           context,

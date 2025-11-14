@@ -3,7 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:codexhub01/parts/log_in.dart';
 import 'package:codexhub01/services/authservice.dart';
-import 'package:codexhub01/parts/mentor_qualification'; // IMPORT QUALIFICATION
+import 'package:codexhub01/parts/mentor_qualification'; 
 
 class SignUp extends StatefulWidget {
   const SignUp({super.key});

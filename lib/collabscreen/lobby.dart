@@ -241,12 +241,12 @@ class _CollabLobbyScreenState extends State<CollabLobbyScreen> {
         mentorId = session['mentor_id']?.toString() ?? '';
         menteeId = session['mentee_id']?.toString() ?? '';
       } else {
-        // Create new session if none exists
+
         final newSession = await supabase
             .from('live_sessions')
             .insert({
               'room_id': roomId,
-              'mentee_id': room['creator_id'], // Room creator is mentee
+              'mentee_id': room['creator_id'], 
               'code': '// Welcome to the collaboration room!\n// Start coding together...',
               'is_live': false,
               'language': 'python',

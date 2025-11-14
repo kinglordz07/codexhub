@@ -5,7 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:http/http.dart' as http;
 
-// ✅ NEW: Mobile-optimized Saved Sessions Screen
 class SavedSessionsScreen extends StatelessWidget {
   const SavedSessionsScreen({super.key});
 
@@ -179,7 +178,6 @@ class SavedSessionsScreen extends StatelessWidget {
         }
       }
       
-      // Sort by last saved timestamp (newest first)
       sessions.sort((a, b) {
         final aTime = a['last_saved'] ?? 0;
         final bTime = b['last_saved'] ?? 0;
@@ -267,7 +265,6 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen> {
   String? _mentorId;
   String? _currentUserId;
 
-  // ✅ OPTIMIZED: Faster timers for real-time typing
   Timer? _typingTimer;
   Timer? _cursorTimer;
   Timer? _reconnectTimer;
@@ -280,15 +277,12 @@ class _CollabCodeEditorScreenState extends State<CollabCodeEditorScreen> {
   String? _lastLocalCode;
   String? _lastLocalFeedback;
 
-  // ✅ NEW: Local session storage key
   String get _sessionStorageKey => 'session_${widget.roomId}';
 
-  // ✅ NEW: Permission management
   List<String> _allowedUsers = [];
   List<Map<String, dynamic>> _roomMembers = [];
   Map<String, dynamic> _currentSession = {};
 
-  // ✅ FIXED: Simple text-based snippets
   final Map<String, String> _defaultSnippets = {
     'python': '''# Welcome to Python Collaboration!
 # You can see real-time changes from other users
@@ -343,14 +337,12 @@ class Program {
 ''',
   };
 
-  // Language mapping for execution
   final Map<String, String> _languageMapping = {
     'python': 'python3',
     'java': 'java',
     'csharp': 'dotnet',
   };
 
-  // ✅ NEW: Mobile-optimized responsive design
   bool get _isSmallScreen {
     final mediaQuery = MediaQuery.of(context);
     return mediaQuery.size.width < 600;
@@ -364,11 +356,11 @@ class Program {
   double get _codeEditorHeight {
     final mediaQuery = MediaQuery.of(context);
     if (mediaQuery.size.width < 400) {
-      return 200; // Very small phones
+      return 200; 
     } else if (mediaQuery.size.width < 600) {
-      return 250; // Small phones
+      return 250; 
     } else {
-      return 350; // Tablets and larger screens
+      return 350;
     }
   }
 
@@ -445,7 +437,6 @@ class Program {
       _currentUserId = _supabase.auth.currentUser?.id;
       debugPrint('👤 Loading session for user: $_currentUserId');
 
-      // ✅ TRY LOAD FROM LOCAL STORAGE FIRST
       final localSession = await _loadSessionFromLocalStorage();
       
       if (localSession != null) {
@@ -459,7 +450,6 @@ class Program {
         
         _safeShowSuccessSnackBar('📁 Loaded from local storage');
       } else {
-        // ✅ FALLBACK: Load from Supabase
         debugPrint('🔄 No local session found, loading from Supabase...');
         final session = await _supabase
             .from('live_sessions')
@@ -767,10 +757,9 @@ class Program {
 
   void _restartFeedbackTimer(VoidCallback callback) {
     _feedbackTimer?.cancel();
-    _feedbackTimer = Timer(const Duration(milliseconds: 300), callback);
+    _feedbackTimer = Timer(const Duration(milliseconds: 500), callback);
   }
 
-  // ✅ NEW: Mobile-optimized permission manager with Bottom Sheet
   void _showPermissionManager() {
     showModalBottomSheet(
       context: context,
@@ -878,7 +867,7 @@ class Program {
                                           backgroundColor: roleColor,
                                           radius: _isVerySmallScreen ? 16 : 20,
                                           child: Text(
-                                            username[0].toUpperCase(),
+                                            username.isNotEmpty ? username[0].toUpperCase() : '?',
                                             style: TextStyle(
                                               color: Colors.white,
                                               fontSize: _isVerySmallScreen ? 12 : 14,
@@ -967,7 +956,6 @@ class Program {
     );
   }
 
-  // ✅ NEW: Helper for legend with mobile-optimized sizing
   Widget _buildAccessLegendItem(String text, String subtitle, Color color) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
@@ -1311,7 +1299,7 @@ class Program {
   }
 
   void _handleRemoteUpdate(Map<String, dynamic> newData) {
-    if (!mounted) return;
+     if (!mounted || _isChangingLanguage) return;
     
     debugPrint('🔄 HANDLING REMOTE UPDATE:');
     debugPrint('  - _isLocalEdit: $_isLocalEdit');
@@ -1397,38 +1385,53 @@ class Program {
 
   void _restartTypingTimer(VoidCallback callback) {
     _typingTimer?.cancel();
-    _typingTimer = Timer(const Duration(milliseconds: 300), callback);
+    _typingTimer = Timer(const Duration(milliseconds: 800), callback);
   }
 
   void _restartCursorTimer(VoidCallback callback) {
     _cursorTimer?.cancel();
-    _cursorTimer = Timer(const Duration(milliseconds: 200), callback);
+    _cursorTimer = Timer(const Duration(milliseconds: 500), callback);
   }
 
-  void _onLanguageChanged(String? newLanguage) {
-    if (newLanguage == null || newLanguage == _selectedLanguage || !_canEdit) return;
+  bool _isChangingLanguage = false; 
+
+void _onLanguageChanged(String? newLanguage) {
+  if (newLanguage == null || newLanguage == _selectedLanguage || !_canEdit) return;
+  
+  _languageChangeTimer?.cancel();
+  _languageChangeTimer = Timer(const Duration(milliseconds: 500), () async {
+    if (!mounted) return;
     
-    _languageChangeTimer?.cancel();
-    _languageChangeTimer = Timer(const Duration(milliseconds: 500), () {
-      if (mounted) {
-        setState(() {
-          _selectedLanguage = newLanguage;
+    _isChangingLanguage = true;
+    
+    final currentCode = _codeController.text;
+    
+    if (mounted) {
+      setState(() {
+        _selectedLanguage = newLanguage;
+        
+        if (currentCode.trim().isEmpty) {
           _codeController.text = _defaultSnippets[newLanguage] ?? '';
           _lastLocalCode = _codeController.text;
-        });
-        _updateLiveField('language', newLanguage);
-      }
-    });
-  }
+        }
+      });
+      
+      await _updateLiveField('language', newLanguage);
+      
+      Future.delayed(const Duration(seconds: 3), () {
+        _isChangingLanguage = false;
+      });
+    }
+  });
+}
 
-  // ✅ ✅ ✅ BAGONG SAVE FUNCTION - LOCAL STORAGE LANG!
   Future<void> _saveCode() async {
     if (_isSaving || !_canEdit) return;
     
     if (mounted) setState(() => _isSaving = true);
     
     try {
-      // ✅ ✅ ✅ SAVE TO LOCAL STORAGE - WALANG SUPABASE!
+
       await _saveSessionToLocalStorage();
       
       _safeShowSuccessSnackBar('💾 Code saved LOCALLY!');
@@ -1442,7 +1445,6 @@ class Program {
     }
   }
 
-  // ✅ ✅ ✅ NEW: Save session to LOCAL STORAGE
   Future<void> _saveSessionToLocalStorage() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -1502,7 +1504,6 @@ class Program {
     });
   }
 
-  // ✅ NEW: Mobile-optimized connection status
   Widget _buildConnectionStatus() {
     return Container(
       padding: EdgeInsets.symmetric(
@@ -1535,30 +1536,59 @@ class Program {
     );
   }
 
-  // ✅ NEW: Mobile-optimized language selector
   Widget _buildLanguageSelector() {
     return DropdownButtonFormField<String>(
-      initialValue: _selectedLanguage,
-      decoration: InputDecoration(
-        border: const OutlineInputBorder(),
-        contentPadding: EdgeInsets.symmetric(
-          horizontal: _isVerySmallScreen ? 8 : 12,
-          vertical: _isVerySmallScreen ? 12 : 14,
-        ),
-        labelText: 'Language',
-        labelStyle: TextStyle(fontSize: _isSmallScreen ? 14 : 16),
+    initialValue: _selectedLanguage,
+    decoration: InputDecoration(
+      border: const OutlineInputBorder(),
+      contentPadding: EdgeInsets.symmetric(
+        horizontal: _isVerySmallScreen ? 8 : 12,
+        vertical: _isVerySmallScreen ? 12 : 14,
       ),
-      items: const [
-        DropdownMenuItem(value: 'python', child: Text('Python')),
-        DropdownMenuItem(value: 'java', child: Text('Java')),
-        DropdownMenuItem(value: 'csharp', child: Text('C#')),
-      ],
-      onChanged: _canEdit ? _onLanguageChanged : null,
-      style: TextStyle(fontSize: _isSmallScreen ? 14 : 16),
-    );
-  }
+      labelText: 'Language',
+      labelStyle: TextStyle(
+        fontSize: _isSmallScreen ? 14 : 16,
+        color: Colors.black87, 
+      ),
+      filled: true,
+      fillColor: Colors.grey.shade50, 
+    ),
+    items: const [
+      DropdownMenuItem(
+        value: 'python',
+        child: Text(
+          'Python',
+          style: TextStyle(color: Colors.black), 
+        ),
+      ),
+      DropdownMenuItem(
+        value: 'java',
+        child: Text(
+          'Java', 
+          style: TextStyle(color: Colors.black), 
+        ),
+      ),
+      DropdownMenuItem(
+        value: 'csharp',
+        child: Text(
+          'C#',
+          style: TextStyle(color: Colors.black), 
+        ),
+      ),
+    ],
+    onChanged: _canEdit ? _onLanguageChanged : null,
+    style: TextStyle(
+      fontSize: _isSmallScreen ? 14 : 16,
+      color: Colors.black, 
+    ),
+    dropdownColor: Colors.white, 
+    icon: Icon(
+      Icons.arrow_drop_down,
+      color: Colors.black, 
+    ),
+  );
+}
 
-  // ✅ NEW: Mobile-optimized code editor
   Widget _buildCodeEditor() {
     return Container(
       height: _codeEditorHeight,
@@ -1625,7 +1655,6 @@ class Program {
     );
   }
 
-  // ✅ NEW: Mobile-optimized output panel
   Widget _buildOutputPanel() {
     return Container(
       width: double.infinity,

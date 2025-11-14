@@ -1,22 +1,22 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'notif.dart';
 
 class CallService {
   final supabase = Supabase.instance.client;
   final Map<String, Timer> _missedCallTimers = {};
   final Map<String, StreamSubscription> _activeSubscriptions = {};
+  final Set<String> _activeNotifications = {};
 
-  /// 🔹 Start a call - WITH UPDATED SCHEMA
   Future<String> startCall({
     required String callerId,
     required String receiverId,
-    required String callType, // 'audio' or 'video'
+    required String callType, 
   }) async {
     debugPrint('📞 [startCall] Caller: $callerId → Receiver: $receiverId ($callType)');
 
     try {
-      // ✅ Check if receiver already has a ringing call
       final existingCalls = await supabase
           .from('calls')
           .select()
@@ -28,7 +28,6 @@ class CallService {
         throw Exception("Receiver is already in another call");
       }
 
-      // ✅ Get caller name from profiles_new table
       final currentUser = supabase.auth.currentUser;
       String callerName = 'Unknown User';
 
@@ -49,7 +48,6 @@ class CallService {
         }
       }
 
-      // ✅ Insert new call - WITH UPDATED SCHEMA
       final response = await supabase.from('calls').insert({
         'caller_id': callerId,
         'receiver_id': receiverId,
@@ -57,15 +55,23 @@ class CallService {
         'call_type': callType,
         'caller_name': callerName,
         'created_at': DateTime.now().toUtc().toIso8601String(),
-        'accepted_at': null, // Will be set when call is accepted
-        'ended_at': null, // Will be set when call ends
+        'accepted_at': null, 
+        'ended_at': null, 
       }).select('id').single();
 
       final callID = response['id'] as String;
       debugPrint('✅ [startCall] Call created successfully: $callID');
 
-      // 🔹 Start missed call timer (30 seconds)
-      _startMissedCallTimer(callID);
+      // 🔔 Send incoming call notification - FIXED PARAMETERS
+      await NotificationService.showIncomingCallNotification(
+        id: callID.hashCode, // Convert string ID to int for notification ID
+        callerName: callerName,
+        callType: callType,
+        payload: callID, // Use payload to pass the call ID
+      );
+
+      // 🔹 Start missed call timer (30 seconds) - PASS THE VARIABLES
+      _startMissedCallTimer(callID, callerName, callType);
 
       return callID;
     } catch (e, stack) {
@@ -75,8 +81,8 @@ class CallService {
     }
   }
 
-  /// 🔹 Automatically marks a call as "missed" after 30 seconds if still ringing
-  void _startMissedCallTimer(String callID) {
+  // 🔹 FIXED: Pass callerName and callType as parameters
+  void _startMissedCallTimer(String callID, String callerName, String callType) {
     debugPrint('⏳ [missedCallTimer] Timer started for call $callID');
     
     _missedCallTimers[callID]?.cancel();
@@ -98,6 +104,12 @@ class CallService {
               })
               .eq('id', callID);
           debugPrint('📵 [missedCallTimer] Call $callID marked as missed');
+          
+          // 🔔 Send missed call notification
+          await NotificationService.showMissedCallNotification(
+            callerName: callerName,
+            callType: callType,
+          );
         }
         
         _missedCallTimers.remove(callID);
@@ -108,13 +120,16 @@ class CallService {
     });
   }
 
-  /// 🔹 Accept call - WITH accepted_at TIMESTAMP
+  /// 🔹 Accept call
   Future<void> acceptCall(String callID) async {
     debugPrint('✅ [acceptCall] Accepting call ID: $callID');
     
     try {
       _missedCallTimers[callID]?.cancel();
       _missedCallTimers.remove(callID);
+      
+      // Cancel the incoming call notification when call is accepted
+      await NotificationService.cancel(callID.hashCode);
       
       await supabase.from('calls').update({
         'status': 'accepted',
@@ -129,13 +144,16 @@ class CallService {
     }
   }
 
-  /// 🔹 Decline call - WITH ended_at TIMESTAMP
+  /// 🔹 Decline call
   Future<void> declineCall(String callID) async {
     debugPrint('🚫 [declineCall] Declining call ID: $callID');
     
     try {
       _missedCallTimers[callID]?.cancel();
       _missedCallTimers.remove(callID);
+      
+      // Cancel the incoming call notification when call is declined
+      await NotificationService.cancel(callID.hashCode);
       
       await supabase.from('calls').update({
         'status': 'declined',
@@ -150,13 +168,16 @@ class CallService {
     }
   }
 
-  /// 🔹 End call - WITH ended_at TIMESTAMP
+  /// 🔹 End call
   Future<void> endCall(String callID) async {
     debugPrint('🛑 [endCall] Ending call ID: $callID');
     
     try {
       _missedCallTimers[callID]?.cancel();
       _missedCallTimers.remove(callID);
+      
+      // Cancel any ongoing call notification
+      await NotificationService.cancel(callID.hashCode);
       
       await supabase.from('calls').update({
         'status': 'ended',
@@ -183,15 +204,41 @@ class CallService {
         .map((events) {
           debugPrint('📡 [listenIncomingCalls] ${events.length} call(s) received');
           
-          // Filter only ringing calls
-          return events
+          // Filter only ringing calls and trigger notifications
+          final ringingCalls = events
               .where((call) => call['status'] == 'ringing')
               .map<Map<String, dynamic>>((call) => _formatCallData(call))
               .toList();
+
+          // 🔔 For new ringing calls, ensure notification is shown
+          for (final call in ringingCalls) {
+            _ensureCallNotification(call);
+          }
+
+          return ringingCalls;
         });
   }
 
-  /// 🔹 Format call data with new timestamp fields
+  /// 🔹 Ensure call notification is shown for new ringing calls - FIXED
+  void _ensureCallNotification(Map<String, dynamic> call) async {
+    final callId = call['id'] as String;
+    final callerName = call['caller_name'] as String? ?? 'Unknown';
+    final callType = call['call_type'] as String? ?? 'audio';
+
+    // Check if we've already notified for this call
+    if (!_activeNotifications.contains(callId)) {
+      _activeNotifications.add(callId);
+      
+      await NotificationService.showIncomingCallNotification(
+        id: callId.hashCode, // Required parameter
+        callerName: callerName,
+        callType: callType,
+        payload: callId, // Use payload instead of callId parameter
+      );
+    }
+  }
+
+  /// 🔹 Format call data
   Map<String, dynamic> _formatCallData(Map<String, dynamic> call) {
     return {
       'id': call['id'],
@@ -201,8 +248,8 @@ class CallService {
       'call_type': call['call_type'],
       'caller_name': call['caller_name'],
       'created_at': call['created_at'],
-      'accepted_at': call['accepted_at'], // New field
-      'ended_at': call['ended_at'], // New field
+      'accepted_at': call['accepted_at'],
+      'ended_at': call['ended_at'],
     };
   }
 
@@ -354,6 +401,11 @@ class CallService {
     _activeSubscriptions[callID]?.cancel();
     _activeSubscriptions.remove(callID);
     
+    _activeNotifications.remove(callID);
+    
+    // Cancel the notification
+    NotificationService.cancel(callID.hashCode);
+    
     debugPrint('🧹 [cleanupCall] Cleaned up resources for call: $callID');
   }
 
@@ -370,5 +422,7 @@ class CallService {
       subscription.cancel();
     });
     _activeSubscriptions.clear();
+    
+    _activeNotifications.clear();
   }
 }

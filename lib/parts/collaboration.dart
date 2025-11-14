@@ -11,7 +11,6 @@ class _CollaborationScreenState extends State<CollaborationScreen> {
   final List<String> _chatMessages = [];
   final TextEditingController _messageController = TextEditingController();
 
-  // Empty groups/users (lalagyan lang kapag may invite)
   final List<String> _collaborators = [];
 
   bool isInCollaboration = false;
@@ -106,7 +105,6 @@ class _CollaborationScreenState extends State<CollaborationScreen> {
           ),
 
           if (isInCollaboration) ...[
-            // --- Collaborators List (empty until invited) ---
             const Text(
               'Collaborators',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -127,8 +125,6 @@ class _CollaborationScreenState extends State<CollaborationScreen> {
                       ),
                 ),
               ),
-
-            // --- Invite Example ---
             Padding(
               padding: const EdgeInsets.all(8.0),
               child: ElevatedButton.icon(
@@ -143,7 +139,6 @@ class _CollaborationScreenState extends State<CollaborationScreen> {
 
             const Divider(),
 
-            // --- Chat Section ---
             const Text(
               'Collaboration Chat',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),

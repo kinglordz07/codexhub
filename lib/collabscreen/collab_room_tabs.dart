@@ -37,11 +37,6 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
   String? currentMenteeId;
   bool _isInitializing = true;
 
-  // ✅ REMOVED: _mentorUsernameController and _isInvitingMentor
-
-  // ✅ REMOVED: All permission-related variables
-
-  // ✅ ENHANCED: Better responsive detection
   bool get isSmallScreen {
     final mediaQuery = MediaQuery.of(context);
     return mediaQuery.size.width < 600;
@@ -57,7 +52,6 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     return mediaQuery.size.width >= 600 && mediaQuery.size.width < 1200;
   }
 
-  // ✅ ENHANCED: Dynamic font sizes for mobile
   double get titleFontSize => isVerySmallScreen ? 14 : (isSmallScreen ? 16 : (isTablet ? 18 : 20));
   double get bodyFontSize => isVerySmallScreen ? 12 : (isSmallScreen ? 14 : 16);
   double get iconSize => isVerySmallScreen ? 18 : (isSmallScreen ? 20 : 24);
@@ -73,7 +67,6 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
   @override
   void dispose() {
     _tabController.dispose();
-    // ✅ REMOVED: _mentorUsernameController disposal
     super.dispose();
   }
 
@@ -86,12 +79,10 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     return uuidRegex.hasMatch(uuid);
   }
 
-  // ✅ SIMPLIFIED: Initialize user and session only
   Future<void> _initUserAndSession() async {
     currentUserId = supabase.auth.currentUser?.id;
     liveSessionId = widget.sessionId;
 
-    // ✅ IMPROVED: Better validation
     if (widget.roomId.isEmpty || !_isValidUUID(widget.roomId)) {
       debugPrint("❌ Error: roomId is empty or invalid UUID: ${widget.roomId}");
       if (mounted) {
@@ -144,7 +135,6 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     }
   }
 
-  // ✅ SIMPLIFIED: Just ensure user is in room
   Future<void> _ensureUserInRoom() async {
     if (currentUserId == null) return;
 
@@ -172,7 +162,6 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     }
   }
 
-  // ✅ SIMPLIFIED: Basic role checks
   bool get _amMentee =>
       currentUserId != null &&
       currentMenteeId != null &&
@@ -183,29 +172,20 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
       mentorId != null && 
       currentUserId == mentorId;
 
-  // ✅ REMOVED: All mentor invitation methods
-  // - inviteMentorByUsername
-  // - _inviteMentorById
-  // - _showInviteMentorDialog
-  // - _inviteMentorFromDialog
-  // - _autoKickCreator
-
   Future<void> acceptInviteAsMentor() async {
-    if (currentUserId == null) return;
-    try {
-      await supabase.from('live_sessions').update({
-        'mentor_id': currentUserId,
-        'is_live': true,
-        'last_editor': currentUserId
-      }).eq('room_id', widget.roomId);
+  try {
 
-      _showSnack('🎯 You joined as mentor.');
-      await _initUserAndSession();
-    } catch (e) {
-      debugPrint('❌ Error accepting invite as mentor: $e');
-      _showSnack('Failed to join as mentor.');
-    }
+    await supabase.from('live_sessions').update({
+      'mentor_id': currentUserId,
+      'is_live': true,
+      'last_editor': currentUserId
+    }).eq('room_id', widget.roomId); 
+    
+    debugPrint('✅ Mentor joined EXISTING room: ${widget.roomId}');
+  } catch (e) {
+    debugPrint('❌ Error: $e');
   }
+}
 
   Future<void> mentorLeave() async {
     if (!_amMentor || currentUserId == null) return;
@@ -236,11 +216,6 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     );
   }
 
-  // ✅ REMOVED: _buildRoleIndicator method
-
-  // ✅ REMOVED: _buildMentorInviteButton method
-
-  // ✅ ENHANCED: Mobile-optimized loading state
   Widget _buildLoadingState() {
     return Center(
       child: Column(
@@ -270,13 +245,10 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
     );
   }
 
-  // ✅ SIMPLIFIED: Clean app bar without room name and role indicators
   PreferredSizeWidget _buildAppBar() {
     return AppBar(
       backgroundColor: Colors.indigo,
       elevation: 2,
-      // ✅ REMOVED: title with room name
-      // ✅ REMOVED: role indicator from title
       bottom: PreferredSize(
         preferredSize: Size.fromHeight(isSmallScreen ? 40 : 48),
         child: TabBar(
@@ -310,8 +282,7 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
           ],
         ),
       ),
-      // ✅ REMOVED: All actions (mentor invite button, leave button, etc.)
-      actions: const [], // Empty actions
+      actions: const [], 
     );
   }
 
@@ -319,16 +290,13 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
   Widget build(BuildContext context) {
     if (_isInitializing) {
       return Scaffold(
-        // ✅ SIMPLIFIED: Loading app bar without room name
         appBar: AppBar(
           backgroundColor: Colors.indigo,
-          // ✅ REMOVED: title with room name
         ),
         body: _buildLoadingState(),
       );
     }
 
-    // ✅ SIMPLIFIED: Just pass basic info to CodeEditor
     debugPrint("🎯 BUILD - Current User: $currentUserId");
     debugPrint("🎯 BUILD - Roles - Mentor: $_amMentor, Mentee: $_amMentee");
 
@@ -345,10 +313,9 @@ class _CollabRoomTabsState extends State<CollabRoomTabs>
               roomName: widget.roomName,
               isMentor: widget.isMentor,
             ),
-            // Code Editor Tab - ✅ ALL PERMISSION LOGIC HANDLED IN CODE EDITOR
             CollabCodeEditorScreen(
               roomId: widget.roomId,
-              isReadOnly: false, // ✅ Let CodeEditor handle permissions
+              isReadOnly: false, 
               isMentor: _amMentor,
               liveSessionId: liveSessionId ?? widget.sessionId,
             ),

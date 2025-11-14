@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:codexhub01/parts/log_in.dart';
 import 'package:codexhub01/services/notif.dart';
+import '../main.dart'; 
 
 class ProfileScreen extends StatefulWidget {
   final ValueNotifier<ThemeMode>? themeNotifier;
@@ -38,7 +39,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final hasSeenPrompt = _prefs?.getBool('hasSeenNotificationPrompt') ?? false;
     
     if (!hasSeenPrompt && mounted) {
-      // First time - show permission explanation
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _showNotificationExplanationDialog();
       });
@@ -62,7 +62,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         actions: [
           TextButton(
             onPressed: () {
-              // User declined - save that they've seen the prompt
               _prefs?.setBool('hasSeenNotificationPrompt', true);
               _prefs?.setBool('notificationsEnabled', false);
               Navigator.pop(context);
@@ -71,20 +70,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           TextButton(
             onPressed: () {
-              // User accepted - enable notifications
               _prefs?.setBool('hasSeenNotificationPrompt', true);
               _prefs?.setBool('notificationsEnabled', true);
               setState(() {
                 notificationsEnabled = true;
               });
               
-              // Show welcome notification
               NotificationService.showNotification(
                 title: "Notifications Enabled!",
                 body: "You'll now receive alerts for important updates.",
               );
               
-              // Update database
               _updateNotificationPreference(true);
               
               Navigator.pop(context);
@@ -110,52 +106,64 @@ class _ProfileScreenState extends State<ProfileScreen> {
       notificationsEnabled = _prefs?.getBool('notificationsEnabled') ?? true;
     });
     
-    // Sync with global theme notifier
     if (widget.themeNotifier != null) {
       widget.themeNotifier!.value = isDarkMode ? ThemeMode.dark : ThemeMode.light;
     }
   }
 
   Future<void> _loadUserProfile() async {
-    final user = supabase.auth.currentUser;
-    if (user == null) return;
+  final user = supabase.auth.currentUser;
+  if (user == null) return;
 
-    final userEmail = user.email ?? "unknown@example.com";
+  final userEmail = user.email ?? "unknown@example.com";
 
-    try {
-      final response = await supabase
-          .from('profiles_new')
-          .select('username, avatar_url, is_dark_mode, role')
-          .eq('id', user.id)
-          .maybeSingle();
+  try {
+    final response = await supabase
+        .from('profiles_new')
+        .select('username, avatar_url, is_dark_mode, role, notifications_enabled')
+        .eq('id', user.id)
+        .maybeSingle();
 
-      if (!mounted) return;
+    if (!mounted) return;
 
-      if (response != null) {
-        String? avatar = response['avatar_url'] as String?;
-        if (avatar != null && avatar.isNotEmpty) {
-          avatar = "$avatar?t=${DateTime.now().millisecondsSinceEpoch}";
-        }
-        
-        // Load user's dark mode preference from profile
-        bool userDarkMode = response['is_dark_mode'] as bool? ?? false;
-
-        setState(() {
-          userName = response['username'] ?? "User";
-          email = userEmail;
-          profileImageUrl = avatar;
-          isDarkMode = userDarkMode;
-        });
-
-        // Update local preferences and global theme
-        await _updateThemePreferences(userDarkMode);
+    if (response != null) {
+      String? avatar = response['avatar_url'] as String?;
+      if (avatar != null && avatar.isNotEmpty) {
+        avatar = "$avatar?t=${DateTime.now().millisecondsSinceEpoch}";
       }
-    } catch (e) {
-      debugPrint("Error loading user profile: $e");
-      // If we can't load from database, use local preferences
-      _loadPreferences();
+      
+      bool userDarkMode = response['is_dark_mode'] as bool? ?? false;
+      bool userNotificationsEnabled = response['notifications_enabled'] as bool? ?? true;
+
+      setState(() {
+        userName = response['username'] ?? "User";
+        email = userEmail;
+        profileImageUrl = avatar;
+        isDarkMode = userDarkMode;
+        notificationsEnabled = userNotificationsEnabled;
+      });
+
+      // 🔴 FIX: Update local preferences with user's database preference
+      await _updateLocalPreferences(userDarkMode, userNotificationsEnabled);
     }
+  } catch (e) {
+    debugPrint("Error loading user profile: $e");
+    _loadPreferences();
   }
+}
+
+Future<void> _updateLocalPreferences(bool darkMode, bool notifications) async {
+  _prefs ??= await SharedPreferences.getInstance();
+  await _prefs?.setBool('isDarkMode', darkMode);
+  await _prefs?.setBool('notificationsEnabled', notifications);
+  
+  // Update NotificationService with user's preference
+  NotificationService.updateNotificationPreference(notifications);
+  
+  if (widget.themeNotifier != null) {
+    widget.themeNotifier!.value = darkMode ? ThemeMode.dark : ThemeMode.light;
+  }
+}
 
   Future<void> _toggleDarkMode(bool value) async {
     if (!mounted) return;
@@ -168,10 +176,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _prefs ??= await SharedPreferences.getInstance();
     await _prefs?.setBool('isDarkMode', value);
 
-    // Update global theme notifier
     widget.themeNotifier?.value = value ? ThemeMode.dark : ThemeMode.light;
 
-    // Update in database if user is logged in
     final user = supabase.auth.currentUser;
     if (user != null) {
       try {
@@ -182,120 +188,83 @@ class _ProfileScreenState extends State<ProfileScreen> {
         debugPrint("✅ Dark mode preference updated: $value");
       } catch (e) {
         debugPrint("❌ Error updating dark mode: $e");
-        // Don't show error - local preference is saved
       }
     }
   }
 
   Future<void> _toggleNotifications(bool value) async {
-    if (!mounted) return;
+  if (!mounted) return;
+  
+  setState(() => notificationsEnabled = value);
+  
+  try {
+    _prefs ??= await SharedPreferences.getInstance();
+    await _prefs?.setBool('notificationsEnabled', value);
     
-    setState(() => notificationsEnabled = value);
-    
-    try {
-      _prefs ??= await SharedPreferences.getInstance();
-      await _prefs?.setBool('notificationsEnabled', value);
-      await _prefs?.setBool('hasSeenNotificationPrompt', true);
+    // 🔔 CRITICAL: Update NotificationService preference
+    NotificationService.updateNotificationPreference(value);
 
-      // Update in database
-      await _updateNotificationPreference(value);
-
-      // Show/hide notifications based on preference
-      if (value) {
-        await _scheduleExampleNotifications();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Notifications enabled - you'll receive alerts for important updates"),
-              duration: Duration(seconds: 3),
-            ),
-          );
-        }
-      } else {
-        await _cancelAllScheduledNotifications();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Notifications disabled - you won't receive any alerts"),
-              duration: Duration(seconds: 2),
-            ),
-          );
-        }
-      }
-
-    } catch (e) {
-      debugPrint("Error updating notifications: $e");
-      // Revert on error
+    if (value) {
+      await NotificationService.initialize();
       if (mounted) {
-        setState(() => notificationsEnabled = !value);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Failed to update notifications: $e")),
+          const SnackBar(
+            content: Text("Notifications enabled"),
+          ),
         );
       }
-    }
-  }
-
-  Future<void> _updateNotificationPreference(bool value) async {
-    final user = supabase.auth.currentUser;
-    if (user != null) {
-      try {
-        await supabase
-            .from('profiles_new')
-            .update({'notifications_enabled': value})
-            .eq('id', user.id);
-        debugPrint("✅ Notification preference updated: $value");
-      } catch (e) {
-        debugPrint("❌ Error updating notification preference: $e");
-        // Don't show error to user - local preference is saved
+      _restartNotificationListeners();
+    } else {
+      await NotificationService.cancelAll();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Notifications disabled"),
+          ),
+        );
       }
+      _clearNotificationIndicators();
+    }
+
+    // 🔴 FIX: Store preference in database for THIS USER
+    await _updateNotificationPreference(value);
+
+  } catch (e) {
+    debugPrint("Error updating notifications: $e");
+    if (mounted) {
+      setState(() => notificationsEnabled = !value);
     }
   }
+}
 
-  Future<void> _scheduleExampleNotifications() async {
-    if (await NotificationService.areNotificationsEnabled()) {
-      // Show immediate welcome notification
-      await NotificationService.showNotification(
-        title: "Notifications Activated! 🎉",
-        body: "You'll now receive alerts for messages, sessions, calls, and more.",
-      );
-      
-      // Optionally schedule daily reminder if needed
-      // await _scheduleDailyReminder();
+Future<void> _updateNotificationPreference(bool value) async {
+  final user = supabase.auth.currentUser;
+  if (user != null) {
+    try {
+      await supabase
+          .from('profiles_new')
+          .update({'notifications_enabled': value})
+          .eq('id', user.id);
+      debugPrint("✅ Notification preference updated for user ${user.id}: $value");
+    } catch (e) {
+      debugPrint("❌ Error updating notification preference: $e");
     }
   }
+}
 
-  Future<void> _cancelAllScheduledNotifications() async {
-    await NotificationService.cancelAll();
+void _restartNotificationListeners() {
+  // This will be handled by the dashboard's initState
+  // Force a rebuild of the dashboard to restart listeners
+  if (mounted) {
+    // You might want to use a more robust state management approach here
+    // For now, we'll rely on the dashboard detecting the preference change
   }
+}
 
-  // Optional: Method to schedule daily reminder (commented out since it's not used)
-  /*
-  Future<void> _scheduleDailyReminder() async {
-    final FlutterLocalNotificationsPlugin notifications = FlutterLocalNotificationsPlugin();
-    
-    const AndroidNotificationDetails androidPlatformChannelSpecifics =
-        AndroidNotificationDetails(
-      'daily_reminder',
-      'Daily Reminder',
-      channelDescription: 'Daily reminder notifications',
-      importance: Importance.max,
-      priority: Priority.high,
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-    );
-    
-    const NotificationDetails platformChannelSpecifics =
-        NotificationDetails(android: androidPlatformChannelSpecifics);
-    
-    // Schedule for daily
-    await notifications.periodicallyShow(
-      0,
-      'Daily Coding Reminder',
-      'Don\'t forget to practice and check your sessions today!',
-      RepeatInterval.daily,
-      platformChannelSpecifics,
-    );
-  }
-  */
+void _clearNotificationIndicators() {
+  // Clear all notification counts and indicators
+  notificationState.clearAll();
+}
 
   void _confirmLogout(BuildContext context) {
     showDialog(
@@ -355,14 +324,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       final Map<String, dynamic> updateData = {'username': newUsername};
 
-      // Handle avatar upload if a new image was selected
       if (newAvatar != null) {
         try {
           final bytes = await newAvatar.readAsBytes();
           final fileExt = newAvatar.path.split('.').last.toLowerCase();
           final fileName = '${user.id}.${fileExt == 'jpg' ? 'jpeg' : fileExt}';
 
-          // Upload to Supabase Storage
           await supabase.storage
               .from('avatars')
               .uploadBinary(
@@ -371,7 +338,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 fileOptions: const FileOptions(upsert: true),
               );
 
-          // Get public URL
           final publicUrl = supabase.storage
               .from('avatars')
               .getPublicUrl(fileName);
@@ -379,14 +345,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
           updateData['avatar_url'] = publicUrl;
         } catch (e) {
           debugPrint("❌ Error uploading avatar: $e");
-          // Continue without avatar if upload fails
         }
       }
 
-      // Update profile in database
       await supabase.from('profiles_new').update(updateData).eq('id', user.id);
 
-      // Reload profile to reflect changes
       await _loadUserProfile();
 
       if (mounted) {
@@ -541,9 +504,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 }
 
-// ... (EditProfileDialog and FullScreenProfilePic classes remain the same)
-
-// Simplified EditProfileDialog (remove offline references)
 class EditProfileDialog extends StatefulWidget {
   final String currentUsername;
   final String? currentAvatarUrl;

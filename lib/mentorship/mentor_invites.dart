@@ -6,7 +6,7 @@ import '../services/live_lobby_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class MentorInvites extends StatefulWidget {
-  final String mentorId; // ✅ UUID string
+  final String mentorId;
   const MentorInvites({super.key, required this.mentorId});
 
   @override
@@ -18,18 +18,58 @@ class _MentorInvitesState extends State<MentorInvites> {
   final supabase = Supabase.instance.client;
   List<Map<String, dynamic>> invites = [];
   bool isLoading = true;
+  bool _isProcessing = false;
+  String? _processingInviteId;
+  RealtimeChannel? _invitesChannel;
 
   @override
   void initState() {
     super.initState();
     _loadInvites();
+    _subscribeToRealtimeUpdates();
   }
 
-  /// 🔹 Load all invites for this mentor (only pending ones)
+  void _subscribeToRealtimeUpdates() {
+    _invitesChannel = supabase
+        .channel('mentor_invites_${widget.mentorId}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'live_invitations',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'mentor_id',
+            value: widget.mentorId,
+          ),
+          callback: (payload) {
+            debugPrint('🔄 Real-time update: ${payload.eventType}');
+            if (mounted) {
+              _loadInvites();
+            }
+          },
+        )
+        .subscribe((status, [_]) {
+      if (status == RealtimeSubscribeStatus.subscribed) {
+        debugPrint('✅ Subscribed to real-time invites');
+      }
+    });
+  }
+
   Future<void> _loadInvites() async {
+    if (!mounted) return;
+    
     setState(() => isLoading = true);
+    
     try {
       final data = await service.fetchInvitesForMentor(widget.mentorId);
+      
+      // Debug: Check timestamps
+      for (var invite in data) {
+        final createdAt = invite['created_at']?.toString();
+        if (createdAt != null) {
+          debugPrint('📨 Invite ${invite['id']}: created_at = $createdAt');
+        }
+      }
 
       if (!mounted) return;
 
@@ -39,79 +79,118 @@ class _MentorInvitesState extends State<MentorInvites> {
             .toList();
         isLoading = false;
       });
+      
+      debugPrint('📥 Loaded ${invites.length} pending invites');
     } catch (e) {
       debugPrint('❌ Error loading invites: $e');
       if (!mounted) return;
       setState(() => isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to load invites')),
-      );
+      _showErrorSnackBar('Failed to load invites');
     }
   }
 
-  /// 🔹 FIXED: Accept or decline an invite with proper flow
   Future<void> _handleInvite(String inviteId, bool accept) async {
+    if (_isProcessing) return;
+    
+    if (!mounted) return;
+    setState(() {
+      _isProcessing = true;
+      _processingInviteId = inviteId;
+    });
+
+    // Remove from UI immediately for better UX
+    final inviteIndex = invites.indexWhere((invite) => invite['id'] == inviteId);
+    final removedInvite = inviteIndex != -1 ? invites[inviteIndex] : null;
+    
+    if (mounted) {
+      setState(() {
+        invites.removeWhere((invite) => invite['id'] == inviteId);
+      });
+    }
+
     try {
       debugPrint('🎯 Handling invite: $inviteId, accept: $accept');
 
-      // 1️⃣ Update the invitation status first
-      await supabase
+      // 1. Update invitation status
+      final updateResult = await supabase
           .from('live_invitations')
           .update({
             'status': accept ? 'accepted' : 'declined',
             'responded_at': DateTime.now().toUtc().toIso8601String(),
           })
-          .eq('id', inviteId);
+          .eq('id', inviteId)
+          .select()
+          .single()
+          .timeout(const Duration(seconds: 10));
 
-      // 2️⃣ Remove invite locally IMMEDIATELY
-      setState(() {
-        invites.removeWhere((invite) => invite['id'] == inviteId);
-      });
+      debugPrint('✅ Invitation status updated to: ${updateResult['status']}');
 
-      // 3️⃣ Show feedback
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(accept ? '✅ Session accepted!' : '❌ Session declined.'),
-        ),
+      
+      _showSuccessSnackBar(
+        accept ? '✅ Session accepted!' : '❌ Session declined.',
+        accept ? Colors.green : Colors.red,
       );
 
-      debugPrint('[INVITE] accept=$accept, inviteId=$inviteId');
-
+      // If declined, stop here
       if (!accept) {
-        // ❌ DECLINED: Just remove the invite and stop here
-        debugPrint('❌ Invite declined, stopping here');
+        debugPrint('❌ Invite declined - process complete');
         return;
       }
 
-      // ✅ ACCEPTED: Continue with session setup
-      debugPrint('✅ Invite accepted, setting up session...');
+      // Continue with session setup for accepted invites
+      await _setupAcceptedSession(inviteId);
 
-      // 4️⃣ Get the session details from the invitation
+    } catch (e, st) {
+      debugPrint('❌ Error in _handleInvite: $e\n$st');
+      
+      // Add invite back if failed
+      if (removedInvite != null && mounted) {
+        setState(() {
+          invites.insert(inviteIndex, removedInvite);
+        });
+      }
+      
+      if (mounted) {
+        _showErrorSnackBar('Failed to process invite: ${e.toString()}');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+          _processingInviteId = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _setupAcceptedSession(String inviteId) async {
+    debugPrint('🔄 Setting up accepted session for invite: $inviteId');
+    
+    try {
+      // 1. Get invitation details
       final invitation = await supabase
           .from('live_invitations')
           .select('session_id, mentee_id, mentee_name, message')
           .eq('id', inviteId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 10));
 
       if (invitation == null) {
-        debugPrint('❌ Invitation not found: $inviteId');
-        return;
+        throw Exception('Invitation not found: $inviteId');
       }
 
       final sessionId = invitation['session_id']?.toString();
       final menteeId = invitation['mentee_id']?.toString();
       final menteeName = invitation['mentee_name']?.toString() ?? 'Mentee';
-  
 
       if (sessionId == null || menteeId == null) {
-        debugPrint('❌ Missing session_id or mentee_id in invitation');
-        return;
+        throw Exception('Missing session_id or mentee_id in invitation');
       }
 
-      debugPrint('🎯 Session ID: $sessionId, Mentee ID: $menteeId');
+      debugPrint('🎯 Setting up session: $sessionId with mentee: $menteeName');
 
-      // 5️⃣ Update the live_sessions table with mentor_id
+      // 2. Update live session with mentor
       await supabase
           .from('live_sessions')
           .update({
@@ -120,53 +199,56 @@ class _MentorInvitesState extends State<MentorInvites> {
             'waiting': false,
             'updated_at': DateTime.now().toUtc().toIso8601String(),
           })
-          .eq('id', sessionId);
+          .eq('id', sessionId)
+          .timeout(const Duration(seconds: 10));
 
       debugPrint('✅ Updated live_sessions with mentor_id');
 
-      // 6️⃣ Get room_id from live_sessions
+      // 3. Get room details
       final sessionDetails = await supabase
           .from('live_sessions')
           .select('room_id')
           .eq('id', sessionId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 10));
 
       if (sessionDetails == null || sessionDetails['room_id'] == null) {
-        debugPrint('❌ No room_id found for session: $sessionId');
-        return;
+        throw Exception('No room_id found for session: $sessionId');
       }
 
       final roomId = sessionDetails['room_id'].toString();
       debugPrint('🎯 Room ID: $roomId');
 
-      // 7️⃣ Auto-join mentor to room_members
-      final existing = await supabase
+      // 4. Auto-join mentor to room
+      final existingMember = await supabase
           .from('room_members')
           .select('id')
           .eq('room_id', roomId)
           .eq('user_id', widget.mentorId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 10));
 
-      if (existing == null) {
+      if (existingMember == null) {
         await supabase.from('room_members').insert({
           'room_id': roomId,
           'user_id': widget.mentorId,
           'joined_at': DateTime.now().toUtc().toIso8601String(),
-        });
+        }).timeout(const Duration(seconds: 10));
         debugPrint('✅ Mentor auto-joined to room_members');
       } else {
         debugPrint('✅ Mentor already in room_members');
       }
 
-      // 8️⃣ Update room to mark as active session
+      // 5. Mark room as having active session
       await supabase
           .from('rooms')
           .update({'has_active_session': true})
-          .eq('id', roomId);
+          .eq('id', roomId)
+          .timeout(const Duration(seconds: 10));
 
       debugPrint('✅ Room marked as having active session');
 
-      // 9️⃣ Navigate to CollabRoomTabs
+      // 6. Navigate to collaboration room
       if (!mounted) return;
 
       debugPrint('🚀 Navigating to CollabRoomTabs...');
@@ -179,48 +261,146 @@ class _MentorInvitesState extends State<MentorInvites> {
             menteeId: menteeId,
             mentorId: widget.mentorId,
             isMentor: true,
-            sessionId: sessionId, // ✅ CRITICAL: Add sessionId
+            sessionId: sessionId,
           ),
         ),
       );
 
-    } catch (e, st) {
-      debugPrint('❌ Error in _handleInvite: $e\n$st');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to process invite: ${e.toString()}'),
-          duration: const Duration(seconds: 5),
-        ),
-      );
+    } catch (e) {
+      debugPrint('❌ Error in _setupAcceptedSession: $e');
+      rethrow;
     }
   }
 
-  /// 🔹 Calculate time ago from created_at timestamp
   String _calculateTimeAgo(String? createdAt) {
-    if (createdAt == null || createdAt.isEmpty) return 'Recently';
+    if (createdAt == null || createdAt.isEmpty) return 'Just now';
     
     try {
-      final dateTime = DateTime.parse(createdAt).toLocal();
+      // Handle different timestamp formats
+      DateTime dateTime;
+      if (createdAt.endsWith('Z')) {
+        dateTime = DateTime.parse(createdAt).toLocal();
+      } else if (createdAt.contains('+')) {
+        dateTime = DateTime.parse(createdAt).toLocal();
+      } else {
+        // Assume UTC if no timezone specified
+        dateTime = DateTime.parse('${createdAt}Z').toLocal();
+      }
+      
       final now = DateTime.now().toLocal();
       final difference = now.difference(dateTime);
+      
+      if (difference.isNegative) {
+        debugPrint('⚠️ Time appears to be in future: $createdAt');
+        return 'Just now';
+      }
       
       if (difference.inSeconds < 60) {
         return 'Just now';
       } else if (difference.inMinutes < 60) {
-        return '${difference.inMinutes}m ago';
+        final minutes = difference.inMinutes;
+        return '$minutes ${minutes == 1 ? 'minute' : 'minutes'} ago';
       } else if (difference.inHours < 24) {
-        return '${difference.inHours}h ago';
+        final hours = difference.inHours;
+        return '$hours ${hours == 1 ? 'hour' : 'hours'} ago';
       } else if (difference.inDays < 30) {
-        return '${difference.inDays}d ago';
+        final days = difference.inDays;
+        return '$days ${days == 1 ? 'day' : 'days'} ago';
       } else {
         final months = (difference.inDays / 30).floor();
         return '$months ${months == 1 ? 'month' : 'months'} ago';
       }
     } catch (e) {
-      debugPrint('Error parsing date: $e');
+      debugPrint('❌ Error parsing date "$createdAt": $e');
       return 'Recently';
     }
+  }
+
+  void _showSuccessSnackBar(String message, Color backgroundColor) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: backgroundColor,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  }
+
+  Widget _buildActionButtons(String inviteId, bool isSmallScreen) {
+    final isProcessingThis = _isProcessing && _processingInviteId == inviteId;
+    
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        ElevatedButton.icon(
+          onPressed: isProcessingThis ? null : () => _handleInvite(inviteId, false),
+          icon: isProcessingThis 
+              ? SizedBox(
+                  width: isSmallScreen ? 16 : 18,
+                  height: isSmallScreen ? 16 : 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.red,
+                  ),
+                )
+              : Icon(
+                  Icons.close,
+                  size: isSmallScreen ? 16 : 18,
+                ),
+          label: Text(
+            isProcessingThis ? 'Processing...' : 'Decline',
+            style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.red[50],
+            foregroundColor: Colors.red,
+            elevation: 0,
+          ),
+        ),
+        SizedBox(width: isSmallScreen ? 8 : 12),
+        ElevatedButton.icon(
+          onPressed: isProcessingThis ? null : () => _handleInvite(inviteId, true),
+          icon: isProcessingThis 
+              ? SizedBox(
+                  width: isSmallScreen ? 16 : 18,
+                  height: isSmallScreen ? 16 : 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.green,
+                  ),
+                )
+              : Icon(
+                  Icons.check,
+                  size: isSmallScreen ? 16 : 18,
+                ),
+          label: Text(
+            isProcessingThis ? 'Processing...' : 'Accept & Join',
+            style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.green[50],
+            foregroundColor: Colors.green,
+            elevation: 0,
+          ),
+        ),
+      ],
+    );
+  }
+
+  @override
+  void dispose() {
+    _invitesChannel?.unsubscribe();
+    super.dispose();
   }
 
   @override
@@ -232,16 +412,29 @@ class _MentorInvitesState extends State<MentorInvites> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          'Session Invitation',
+          'Session Invitations',
           style: TextStyle(fontSize: isSmallScreen ? 18 : 20),
         ),
         backgroundColor: Colors.indigo,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadInvites,
-            tooltip: 'Refresh invites',
-          ),
+          if (_isProcessing)
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              ),
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _loadInvites,
+              tooltip: 'Refresh invites',
+            ),
         ],
       ),
       body: SafeArea(
@@ -331,6 +524,7 @@ class _MentorInvitesState extends State<MentorInvites> {
     bool isVerySmallScreen
   ) {
     final inviteId = invite['id'].toString();
+    final createdAt = invite['created_at']?.toString();
 
     return Card(
       margin: EdgeInsets.all(isSmallScreen ? 6 : 8),
@@ -360,12 +554,27 @@ class _MentorInvitesState extends State<MentorInvites> {
                     ),
                   ),
                 ),
-                Text(
-                  timeAgo,
-                  style: TextStyle(
-                    fontSize: isSmallScreen ? 12 : 14,
-                    color: Colors.grey[600],
-                  ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      timeAgo,
+                      style: TextStyle(
+                        fontSize: isSmallScreen ? 12 : 14,
+                        color: Colors.grey[600],
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    // Debug timestamp (visible in debug mode only)
+                    if (createdAt != null)
+                      Text(
+                        '${createdAt.substring(11, 16)} UTC',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.grey[400],
+                        ),
+                      ),
+                  ],
                 ),
               ],
             ),
@@ -375,11 +584,11 @@ class _MentorInvitesState extends State<MentorInvites> {
               style: TextStyle(
                 fontSize: isSmallScreen ? 14 : 16,
                 color: Colors.grey[700],
+                fontWeight: FontWeight.w500,
               ),
             ),
             SizedBox(height: isSmallScreen ? 4 : 6),
             
-            // 🔥 Display student's message if available
             if (message != null && message.isNotEmpty) ...[
               SizedBox(height: isSmallScreen ? 8 : 12),
               Container(
@@ -435,44 +644,7 @@ class _MentorInvitesState extends State<MentorInvites> {
             ],
             
             SizedBox(height: isSmallScreen ? 12 : 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                ElevatedButton.icon(
-                  onPressed: () => _handleInvite(inviteId, false),
-                  icon: Icon(
-                    Icons.close,
-                    size: isSmallScreen ? 16 : 18,
-                  ),
-                  label: Text(
-                    'Decline',
-                    style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red[50],
-                    foregroundColor: Colors.red,
-                    elevation: 0,
-                  ),
-                ),
-                SizedBox(width: isSmallScreen ? 8 : 12),
-                ElevatedButton.icon(
-                  onPressed: () => _handleInvite(inviteId, true),
-                  icon: Icon(
-                    Icons.check,
-                    size: isSmallScreen ? 16 : 18,
-                  ),
-                  label: Text(
-                    'Accept & Join',
-                    style: TextStyle(fontSize: isSmallScreen ? 12 : 14),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green[50],
-                    foregroundColor: Colors.green,
-                    elevation: 0,
-                  ),
-                ),
-              ],
-            ),
+            _buildActionButtons(inviteId, isSmallScreen),
           ],
         ),
       ),

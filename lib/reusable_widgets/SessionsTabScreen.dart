@@ -1,7 +1,7 @@
 // ignore_for_file: file_names
 
 import 'package:flutter/material.dart';
-import 'package:codexhub01/mentorship/schedulesession_screen.dart';
+import 'package:codexhub01/parts/schedulesession_screen.dart';
 import 'package:codexhub01/parts/mysessionlist.dart';
 
 class SessionsTabScreen extends StatefulWidget {

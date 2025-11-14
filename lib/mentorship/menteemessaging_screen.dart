@@ -33,7 +33,6 @@ class _MenteeMessagingScreenState extends State<MenteeMessagingScreen> {
   bool isDialogOpen = false;
   bool isSending = false;
   final Set<String> _showingDialogs = {};
-  // REMOVED: _currentCallID since it's unused
 
   @override
   void initState() {
@@ -78,7 +77,6 @@ class _MenteeMessagingScreenState extends State<MenteeMessagingScreen> {
     });
   }
 
-  // In the _showIncomingCallDialog method, update the decline part:
 Future<void> _showIncomingCallDialog(Map<String, dynamic> call) async {
   final callID = call['id'].toString();
   final callerName = call['caller_name'] ?? 'Unknown';
@@ -118,7 +116,6 @@ Future<void> _showIncomingCallDialog(Map<String, dynamic> call) async {
   if (result == true) {
     await _handleCallAcceptance(call);
   } else {
-    // FIXED: Properly handle call decline
     try {
       await _callService.declineCall(callID);
       if (mounted) {
@@ -143,10 +140,8 @@ Future<void> _showIncomingCallDialog(Map<String, dynamic> call) async {
     final callID = call['id'].toString();
     
     try {
-      // Accept call first
       await _callService.acceptCall(callID);
-      
-      // Navigate immediately without waiting for stream updates
+   
       if (!mounted) return;
       
       await Navigator.push(
@@ -158,7 +153,6 @@ Future<void> _showIncomingCallDialog(Map<String, dynamic> call) async {
             userName: currentUser.userMetadata?['username'] ?? 
                      currentUser.email ?? 'User',
             callType: call['call_type'] ?? 'audio',
-            // REMOVED: isCaller parameter since it's not defined in CallPage
           ),
         ),
       );
@@ -184,7 +178,6 @@ Future<void> _showIncomingCallDialog(Map<String, dynamic> call) async {
 
       if (!mounted) return;
 
-      // Navigate directly to call page as caller
       await Navigator.push(
         context,
         MaterialPageRoute(
@@ -194,7 +187,6 @@ Future<void> _showIncomingCallDialog(Map<String, dynamic> call) async {
             userName: currentUser.userMetadata?['username'] ?? 
                      currentUser.email ?? 'User',
             callType: type,
-            // REMOVED: isCaller parameter since it's not defined in CallPage
           ),
         ),
       );
@@ -255,7 +247,6 @@ Future<void> _showIncomingCallDialog(Map<String, dynamic> call) async {
     final currentUserId = service.currentUserId;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final screen = MediaQuery.of(context).size;
-    // USED: isSmall variable is now being used
     final isSmall = screen.width < 400;
 
     final bubbleColorMe = isDark ? Colors.indigoAccent.shade400 : Colors.indigo;

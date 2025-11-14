@@ -38,7 +38,6 @@ class _IntroScreenState extends State<IntroScreen>
     try {
       await Future.delayed(const Duration(milliseconds: 3000));
 
-      // TEMPORARY: Always go to login until dashboards are set up
       _goToLogin();
       
     } catch (error) {

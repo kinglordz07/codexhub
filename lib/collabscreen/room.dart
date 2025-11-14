@@ -342,7 +342,7 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
       // ✅ Show error and restore message
       setState(() {
         _messages.removeWhere((msg) => msg['id'].toString().startsWith('temp_'));
-        _messageController.text = content; // Restore message
+        _messageController.text = content; 
       });
       
       _showError('Failed to send message. Please check your connection.');
@@ -350,37 +350,40 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
   }
 
   Future<void> _inviteMentor() async {
-    if (_isLoadingInvite) return;
-    setState(() => _isLoadingInvite = true);
-    
-    try {
-      final currentUser = supabase.auth.currentUser;
-      if (currentUser == null) {
-        _showError('You must be logged in to invite a mentor');
-        return;
-      }
-
-      final userName = _getCurrentUserName(currentUser);
-      final result = await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => CreateLiveLobby(
-            menteeId: currentUser.id,
-            menteeName: userName,
-            isMentor: false,
-          ),
-        ),
-      );
-
-      await _handleInviteResult(result, currentUser);
-
-    } catch (e, stack) {
-      debugPrint('Error inviting mentor: $e\n$stack');
-      _showError('Failed to invite mentor. Please try again.');
-    } finally {
-      if (mounted) setState(() => _isLoadingInvite = false);
+  if (_isLoadingInvite) return;
+  setState(() => _isLoadingInvite = true);
+  
+  try {
+    final currentUser = supabase.auth.currentUser;
+    if (currentUser == null) {
+      _showError('You must be logged in to invite a mentor');
+      return;
     }
+
+    final userName = _getCurrentUserName(currentUser);
+    
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CreateLiveLobby(
+          menteeId: currentUser.id,
+          menteeName: userName,
+          isMentor: false,
+          existingRoomId: widget.roomId, 
+          existingRoomName: widget.roomName, 
+        ),
+      ),
+    );
+
+    await _handleInviteResult(result, currentUser);
+
+  } catch (e, stack) {
+    debugPrint('Error inviting mentor: $e\n$stack');
+    _showError('Failed to invite mentor. Please try again.');
+  } finally {
+    if (mounted) setState(() => _isLoadingInvite = false);
   }
+}
 
   // ✅ ADD: Helper method to get current user name
   String _getCurrentUserName(User user) {
@@ -481,7 +484,7 @@ class _CollabRoomScreenState extends State<CollabRoomScreen> {
       radius: radius,
       backgroundColor: Colors.primaries[name.codeUnitAt(0) % Colors.primaries.length],
       child: Text(
-        name[0].toUpperCase(), 
+        name.isNotEmpty ? name[0].toUpperCase() : '?', 
         style: TextStyle(
           color: Colors.white, 
           fontSize: radius * 0.6, 
